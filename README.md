@@ -1,6 +1,10 @@
 # repform_app
 
-A new Flutter project.
+FitTracker is a Flutter fitness app with an ESP32 BLE workout flow, sensor-driven calibration, live reps, and locally persisted results. Sign-in and workout prescriptions remain demo/local features.
+
+See [BLE workout setup](docs/BLE_WORKOUT_SETUP.md) for firmware flashing, wiring, phone setup, and recovery behavior.
+
+Start with the [beginner’s guide](docs/BEGINNER_GUIDE.md) for the file map, class/function call relationships, Dart syntax, and an explanation of the live exercise screen. Application source files in `lib/` also contain inline teaching comments.
 
 ## Getting Started
 

@@ -1,51 +1,41 @@
-# FitTracker Flutter Architecture — M1
+# FitTracker architecture
 
-## Boundaries
+The real workout path uses these boundaries:
 
+```text
+FitTrackerApp / AppServices
+  AuthViewModel -> AuthRepository -> MockAuthRepository (Google/backend still pending)
+  WorkoutViewModel -> WorkoutPolicy (date, exercise order, target rules)
+                   -> WorkoutRepository -> LocalWorkoutRepository
+                   -> TrackerGateway -> BleTrackerGateway
+                                         -> FlutterBleTransport -> ESP32 BLE
+  ThemeViewModel -> light/dark theme
 ```
-App composition root / dependency injection
-  ├─ AuthViewModel ── AuthRepository ── MockAuthRepository (future: Google + backend)
-  ├─ WorkoutViewModel ── WorkoutRepository ── DemoWorkoutRepository (future: REST + local cache)
-  │                    └─ TrackerGateway ── MockTrackerGateway (future: Flutter BLE adapter)
-  ├─ WorkoutPolicy (pure rules + unit tests)
-  └─ ThemeViewModel
-       └─ Presentation: Today / Workouts / Setup / Calibration / Live / Progress
-```
 
-The widgets do not know whether records came from sample data, REST, local
-storage or BLE; this is the central design constraint for future modules.
+`LocalWorkoutRepository` uses private app storage for completed results and a local
+starter schedule. Plans have dated IDs and previous plans remain available for
+history. No fabricated completion is inserted into the real repository. Real
+Google sign-in, coach prescriptions, cloud synchronization and account-specific
+storage remain separate work.
 
-## Functional rules
+`BleTrackerGateway` speaks the firmware's binary v1 protocol over Control, Status
+and Telemetry characteristics. It serializes commands and waits for matching
+application-level ACKs. `TrackerStatus` exposes actual calibration and sensor
+readiness. `MockTrackerGateway` is only available by explicit dependency injection
+for tests/demo use; normal app startup selects real BLE.
 
-- The startable set of workouts is restricted to **today**.
-- Workouts within that date are unlocked by completion of all earlier same-day
-  workouts (regardless of their scheduled hours).
-- Past incomplete and future workouts cannot be performed.
-- All earlier exercises in a workout must be complete before starting the next.
-- Completion is explicitly requested by the athlete and allowed when
-  `currentReps >= targetReps`; hitting target must not stop counting.
-- Stop-before-finish creates no completion record.
-- The BLE connection is a **session-level resource**, not per-exercise.
-- Calibration profile keys are `(device ID, exercise kind)` and remain optional.
-- Progress is expressed as workouts completed / exercise-level repetitions,
-  not one nonsensical mixed total across exercise types.
+Setup selects the movement and reads the device's saved profile. Calibration
+starts learning on the ESP32; three accepted sensor cycles save a full NVS profile.
+Start requires a ready sensor and profile. Live counts arrive by telemetry/status.
+Finish stops and confirms the device total before saving. A frozen result allows
+storage retries without restarting the tracker. Stop-without-completion saves
+nothing. Disconnect preserves the local count but requires explicit recovery and
+Resume. Backgrounding pauses counting and cancels active calibration.
 
-## Real implementation interfaces
+Workouts are startable only on their calendar date, with earlier same-day workouts
+and earlier exercises completed first. Missed earlier dates never block today.
+Reps may exceed the target; completion remains an explicit user action.
 
-`AuthRepository` provides a signed-in `AppUser`.
-`WorkoutRepository` loads plans and persists exercise results.
-`TrackerGateway` scans, connects, configures exercise counting,
-streams repetition events, pauses/resumes, stops and saves calibration profiles.
-
-## Next engineering tasks
-
-1. Install/run Flutter, check `flutter analyze` and widget tests.
-2. Replace fake auth with production Google sign-in + verified backend session.
-3. Specify ESP32 BLE GATT service, characteristics and message payload format.
-4. Replace mock BLE gateway and add permission/error/disconnect states.
-5. Add backend API + durable cache for workouts, results, calibration metadata.
-6. Add integration tests for disconnect, reconnect, app suspension and sync.
-
-The `FitTracker_Milestone1_UI_v4.html` source is the design reference, not
-embedded in the Flutter app via WebView. The application uses native Flutter
-widgets, which supports Android and iOS from one Dart codebase.
+See [BLE setup and recovery guide](docs/BLE_WORKOUT_SETUP.md) for the two-project
+change map, hardware setup, protocol, limits, and verification commands, and
+[beginner guide](docs/BEGINNER_GUIDE.md) for Dart/Flutter concepts.
