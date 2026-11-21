@@ -15,17 +15,17 @@ abstract class TrackerGateway {
   Future<void> connect(TrackerDevice device);
   Future<void> disconnect();
 
-  /// Ask firmware to select the movement and report whether its profile exists.
-  Future<void> selectExercise({required String exerciseKind});
-
-  /// Firmware collects real sensor repetitions and persists the learned profile.
-  Future<void> beginCalibration({required String exerciseKind});
   Future<void> refreshStatus();
-  Future<void> startCounting({required String exerciseKind});
+
+  /// START begins pickup, settling, three calibration reps, then counting.
+  Future<void> startCounting();
   Future<void> pauseCounting();
   Future<void> resumeCounting();
 
-  /// FINISH stops counting or cancels calibration; its ACK contains the final count.
+  /// Discard a previous session or recover from ERROR before starting again.
+  Future<void> reset();
+
+  /// FINISH stops an active session; status contains the firmware's reported total.
   Future<void> stopCounting();
   Future<void> dispose();
 }

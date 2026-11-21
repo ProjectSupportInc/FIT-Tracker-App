@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:repform_app/app/app_services.dart';
+import 'package:repform_app/app/fittracker_theme.dart';
 import 'package:repform_app/features/auth/data/mock_auth_repository.dart';
 import 'package:repform_app/features/auth/presentation/auth_view_model.dart';
 import 'package:repform_app/features/workouts/domain/workout_models.dart';
@@ -56,13 +57,13 @@ class _Session {
     await vm.load();
     await vm.connect((await tracker.scan()).first);
     await vm.prepareExercise(exercise);
-    await vm.beginCalibration(exercise);
-    tracker.completeCalibration();
     await vm.startExercise(plan, exercise);
+    tracker.completeCalibration();
     await tester.pumpWidget(AppServices(
       auth: auth,
       workouts: vm,
       child: MaterialApp(
+        theme: fitTheme(Brightness.dark),
         navigatorKey: navigator,
         home: const Scaffold(body: Text('Workout details')),
       ),
@@ -207,6 +208,8 @@ void main() {
     final session = _Session();
     await session.open(tester);
     session.tracker.failStop = true;
+    await tester.ensureVisible(find.text('Stop without completing'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Stop without completing'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Stop exercise'));

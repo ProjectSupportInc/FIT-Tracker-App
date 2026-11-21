@@ -1,51 +1,66 @@
-/// Sensor states reported by the ESP32, in the same order as ft_state_t.
-enum TrackerState { idle, selected, calibrating, ready, running, paused, error }
+/// Wire values mirror ft_state_t in the FreeRTOS firmware.
+enum TrackerState {
+  idle,
+  waitPickup,
+  settling,
+  calibrating,
+  running,
+  paused,
+  finished,
+  error;
 
-/// One authoritative snapshot from the firmware's Status characteristic.
-/// Screens consume this through WorkoutViewModel rather than predicting whether
-/// a command succeeded or pretending that a calibration profile was saved.
+  bool get isPreparing =>
+      this == waitPickup || this == settling || this == calibrating;
+  bool get isActive => isPreparing || this == running;
+}
+
+/// A status is either a command reply or an unsolicited detector/heartbeat event.
+enum TrackerEvent {
+  none,
+  commandOk,
+  commandRejected,
+  handlingDetected,
+  holdComplete,
+  calibrationRep,
+  calibrationReset,
+  templateLocked,
+  sensorError
+}
+
 class TrackerStatus {
   const TrackerStatus({
     required this.state,
-    required this.exerciseId,
-    required this.sensorReady,
-    required this.profileAvailable,
-    required this.repetitions,
-    required this.calibrationReps,
-    this.calibrationTarget = 3,
-    this.result = 0,
+    this.repetitions = 0,
+    this.event = TrackerEvent.none,
+    this.detail = 0,
     this.requestId = 0,
+    this.calibrationReps = 0,
   });
 
   final TrackerState state;
-  final int exerciseId;
-  final bool sensorReady;
-  final bool profileAvailable;
   final int repetitions;
-  final int calibrationReps;
-  final int calibrationTarget;
+  final TrackerEvent event;
+  final int detail;
 
-  /// Zero means success; nonzero values are firmware rejection/error codes.
-  final int result;
-
-  /// Matches a Control request, or zero for an unsolicited status notification.
+  /// Zero means an unsolicited update, never a command acknowledgement.
   final int requestId;
+
+  /// Progress remembered from events on this connection; not a persisted profile.
+  /// Heartbeats do not contain this field. Unknown/missed progress stays at zero.
+  final int calibrationReps;
+  static const calibrationTarget = 3;
+
+  TrackerStatus copyWith({int? repetitions, int? calibrationReps}) =>
+      TrackerStatus(
+        state: state,
+        repetitions: repetitions ?? this.repetitions,
+        event: event,
+        detail: detail,
+        requestId: requestId,
+        calibrationReps: calibrationReps ?? this.calibrationReps,
+      );
 }
 
-/// Stable movement IDs shared with firmware. They are not workout/session IDs.
-/// Aliases keep existing plans and tests compatible without comparing UI labels.
-int exerciseIdForKind(String kind) => switch (kind.trim().toLowerCase()) {
-      'curl' || 'dumbbell curl' => 1,
-      'bench' || 'bench press' => 2,
-      'push-up' || 'push-ups' || 'pushup' || 'pushups' => 3,
-      'shoulder press' => 4,
-      'row' || 'dumbbell row' => 5,
-      'squat' || 'squats' => 6,
-      _ => throw const TrackerException(
-          'This exercise is not supported by the tracker.'),
-    };
-
-/// User-readable BLE/protocol failure; UI can display message without a stack trace.
 class TrackerException implements Exception {
   const TrackerException(this.message);
   final String message;

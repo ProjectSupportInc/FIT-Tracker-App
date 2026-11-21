@@ -7,7 +7,6 @@ Start here, then open the linked source files. The workout flow now uses real BL
 The initial `flutter analyze` run found **13 info-level diagnostics, no warnings and no errors**:
 
 - `live_exercise_screen.dart`: deprecated `WillPopScope`, plus missing braces around an `if` body.
-- `calibration_screen.dart`: missing braces around an `if` body.
 - `today_screen.dart`: two suggestions to use constant widgets/lists.
 - Tests: eight relative imports from `lib/`, now replaced with `package:repform_app/...` imports.
 
@@ -52,15 +51,13 @@ flowchart TD
     G --> I[Meals / Progress / Profile]
     H --> J[WorkoutDetailScreen]
     J --> K[ExerciseSetupScreen]
-    K --> L[CalibrationScreen: if profile needed]
-    L --> K
-    K -->|startExercise, replace route| M[LiveExerciseScreen]
+    K -->|START, replace route| M[LiveExerciseScreen: pickup, hold, calibration, counting]
     M -->|finishExercise, replace route| N[ExerciseCompleteScreen]
     N -->|next exercise| K
     N -->|back to workout| J
 ```
 
-`push` adds a route to the navigation stack. `pop` removes the current route. `pushReplacement` swaps the current route, so Back does not reopen setup after the exercise has started. Calibration uses `push` so saving can `pop` back to setup.
+`push` adds a route to the navigation stack. `pop` removes the current route. `pushReplacement` swaps the current route, so Back does not reopen setup after the exercise has started. Calibration is now part of the live session; the firmware starts counting automatically after three accepted repetitions.
 
 ### File and class map
 
@@ -84,7 +81,7 @@ All paths below link to actual application source. Private `_...State` classes l
 | [profile_screen.dart](../lib/features/profile/presentation/profile_screen.dart) | `ProfileScreen` receives `theme` from MainShell; reads the user, calls `theme.toggle()` and `auth.signOut()`. |
 | [progress_screen.dart](../lib/features/progress/presentation/progress_screen.dart) | `ProgressScreen` listens to the workout controller and displays results grouped by workout and exercise. |
 | [tracker_device.dart](../lib/features/tracker/domain/tracker_device.dart) | `TrackerDevice.id/batteryPercent` feed the setup device picker; device ID also goes into saved results. |
-| [tracker_gateway.dart](../lib/features/tracker/data/tracker_gateway.dart) | `TrackerGateway` declares scanning, connecting, disconnecting, calibration, start/pause/resume/stop, disposal and a count stream. WorkoutViewModel calls it. `disconnect()` has no app UI caller yet. |
+| [tracker_gateway.dart](../lib/features/tracker/data/tracker_gateway.dart) | `TrackerGateway` declares scanning, connecting, disconnecting, start/pause/resume/reset/stop, disposal and status/count streams. WorkoutViewModel calls it. START includes preparation and calibration. |
 | [mock_tracker_gateway.dart](../lib/features/tracker/data/mock_tracker_gateway.dart) | `MockTrackerGateway` is an explicitly injected test/demo adapter. Normal launches use `BleTrackerGateway` and `FlutterBleTransport`. |
 | [workout_models.dart](../lib/features/workouts/domain/workout_models.dart) | `ExercisePlan`, `WorkoutPlan`, `ExerciseResult` are data containers; `exerciseKey()` and `ExerciseResult.key` identify a result by workout/exercise IDs. |
 | [workout_policy.dart](../lib/features/workouts/domain/workout_policy.dart) | `WorkoutAvailability` names statuses. `WorkoutPolicy.exerciseCompleted/workoutCompleted/availability/exerciseUnlocked/targetReached` are rules called by the workout controller. |
@@ -94,9 +91,9 @@ All paths below link to actual application source. Private `_...State` classes l
 | [workouts_screen.dart](../lib/features/workouts/presentation/workouts_screen.dart) | `WorkoutsScreen` groups plans in `days`; `_dayHeading()` formats each group; ready cards open details. |
 | [workout_card.dart](../lib/features/workouts/presentation/workout_card.dart) | `WorkoutCard` receives `workout/vm/onTap` from Today or Workouts; `status/locked/label` determine its presentation. |
 | [workout_detail_screen.dart](../lib/features/workouts/presentation/workout_detail_screen.dart) | `WorkoutDetailScreen` receives the selected workout. `_exerciseTile()` reads completion/unlock status and opens setup. |
-| [exercise_setup_screen.dart](../lib/features/workouts/presentation/exercise_setup_screen.dart) | `ExerciseSetupScreen` / State: `_scan/_connect/_prepare/_start` handle real BLE actions; `_error` displays failures. `_devices/_choosing/_busy` control the picker and loading UI. |
-| [calibration_screen.dart](../lib/features/workouts/presentation/calibration_screen.dart) | `CalibrationScreen` / State: Begin calibration calls `beginCalibration(exercise)`; actual device status supplies reference reps and saved-profile confirmation. |
-| [live_exercise_screen.dart](../lib/features/workouts/presentation/live_exercise_screen.dart) | `LiveExerciseScreen` / State: `_confirmStop/_stop/_finish` handle exit/save. `current/target/completed/extra` derive the visible rep state from the controller. |
+| [exercise_setup_screen.dart](../lib/features/workouts/presentation/exercise_setup_screen.dart) | `ExerciseSetupScreen` / State: `_scan/_connect/_prepare/_start` handle real BLE actions; `_error` displays failures. Entry starts scanning or prepares the existing connection. `_devicePicker/_readyToStart` show the relevant next action. |
+| [live_exercise_screen.dart](../lib/features/workouts/presentation/live_exercise_screen.dart) | `LiveExerciseScreen` / State: `_confirmStop/_stop/_finish` handle exit/save; pause and reconnect actions use the controller. Passes device status, live reps and target to `WorkoutStageView`. |
+| [workout_stage_view.dart](../lib/features/workouts/presentation/workout_stage_view.dart) | `WorkoutStageView` translates device states into prompts. `_movementCue` animates pickup/stillness, `_calibrationCheckpoints` shows accepted reps, and `_repCounter` animates real count changes. `_syncMotion` stops repeating cues in the background or when reduced motion is enabled. It never sends commands or generates reps. |
 | [exercise_complete_screen.dart](../lib/features/workouts/presentation/exercise_complete_screen.dart) | `ExerciseCompleteScreen` reads `result`, finds `index/next`, and checks `workoutDone`; its buttons return to details or replace the route with next-exercise setup. |
 
 ### Workout controller call map
@@ -109,11 +106,11 @@ All paths below link to actual application source. Private `_...State` classes l
 | `workoutComplete`, `exerciseComplete`, `exerciseUnlocked` | Detail/progress/completion UI and controller validation; delegate to policy using stored results. |
 | `doneCount`, `resultFor` | Today/details/progress/completion need counts or one saved record. |
 | `scan`, `connect`, `connectedDevice` | Setup device selection; connection also appears in the live screen and saved result. |
-| `prepareExercise`, `isCalibrated`, `beginCalibration`, `cancelCalibration` | Selects the device movement, starts/cancels sensor learning and reads the device profile flag. |
-| `startExercise` | Setup Start button; checks rules/device, resets `_reps`, subscribes to `repetitionCounts`, starts the tracker. |
+| `prepareExercise`, `canStartExercise`, `isPreparing` | Selects the movement locally, reads current status, and exposes preparation state. There are no saved firmware profiles. |
+| `startExercise` | Setup Start button; checks rules/device, resets `_reps`, resets any abandoned device session, and sends START for preparation/calibration/counting. |
 | `liveReps`, `isPaused`, `togglePause` | Live screen’s counter, status, and pause/resume button. |
 | `isRunning` | Session flag currently exposed for consumers/tests; no app screen reads it yet. |
-| `stopWithoutSaving` | Live stop flow; stops the tracker, cancels the subscription and clears active exercise state. |
+| `stopWithoutSaving` | Live stop flow; stops the connected tracker and clears active exercise state; offline discard cannot stop the device. |
 | `finishExercise` | Live Finish button; checks target, confirms stopping and final count, saves an `ExerciseResult`, then notifies screens. |
 | `dispose` | Root cleanup; cancels rep/status subscriptions and disconnects/disposes the tracker. |
 
@@ -168,7 +165,7 @@ Flutter calls `createState()`, `initState()`, `build()`, and `dispose()` through
 
 The screens, workout-order rules, BLE scanning/connection, sensor calibration, counting, and private-file result storage are implemented. Google sign-in still returns a fixed demo identity, and prescriptions come from a starter schedule. The app does not use the mock tracker unless it is explicitly injected by tests.
 
-The firmware now uses the existing BNO055 repetition detector. Its fixed-orientation mounting assumptions must be validated for each real exercise. Completed history survives app restart; live sessions and pending storage retries do not survive process death. Device profiles are stored on the ESP32. See [the recovery guide](BLE_WORKOUT_SETUP.md) for disconnect, backgrounding, sensor faults, permission errors and storage retry behavior.
+The FreeRTOS firmware uses a BNO055 sampling task and a learned waveform detector task. Mounting and detection accuracy must be validated for each real exercise. Completed history survives app restart; live sessions and pending storage retries do not survive process death. Each session learns a fresh template, with three calibration reps included in the total. Firmware integration blockers and proposed fixes are recorded in [the firmware review](FREERTOS_FIRMWARE_REVIEW.md). See [the recovery guide](BLE_WORKOUT_SETUP.md) for disconnect, backgrounding, sensor faults, permission errors and storage retry behavior.
 
 ### Other project files
 

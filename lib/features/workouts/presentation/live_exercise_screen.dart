@@ -6,12 +6,13 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/app_services.dart';
-import '../../../app/fittracker_theme.dart';
 import '../../../core/widgets/fit_widgets.dart';
 import '../domain/workout_models.dart';
+import '../../tracker/domain/tracker_status.dart';
 import 'exercise_complete_screen.dart';
+import 'workout_stage_view.dart';
 
-/// Replaces ExerciseSetupScreen after counting starts; opens ExerciseCompleteScreen after saving.
+/// Replaces ExerciseSetupScreen after START; guides calibration and counting; opens ExerciseCompleteScreen after saving.
 class LiveExerciseScreen extends StatefulWidget {
   /// Creates LiveExerciseScreen; required arguments supply its dependencies or display data.
   const LiveExerciseScreen(
@@ -53,7 +54,7 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
     }
   }
 
-  /// Reconnection checks that the wearable still has this exercise's session.
+  /// Reconnection checks the same device and its reported state/count.
   /// A recovered paused session requires an explicit Resume button press.
   Future<void> _reconnect() async {
     final vm = AppServices.of(context).workouts;
@@ -73,13 +74,15 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
 
   /// Shows the stop dialog; _stop() awaits true for Stop exercise or false for cancel/dismissal.
   Future<bool> _confirmStop() async {
+    final vm = AppServices.of(context).workouts;
     // Dialog result: true to stop, false to continue, or null if dismissed.
     final answer = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
               title: const Text('Stop this exercise?'),
-              content: const Text(
-                  'Your exercise will remain incomplete. You can restart it later.'),
+              content: Text(vm.isDisconnected
+                  ? 'This discards the phone session only. The tracker may still be counting. Reconnect to stop it, or power it off. Your exercise will remain incomplete.'
+                  : 'Your exercise will remain incomplete. You can restart it later.'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(dialogContext, false),
@@ -144,171 +147,147 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
     }
   }
 
-  /// Flutter calls this to describe the UI. context locates services/theme/navigation above this widget.
   @override
   Widget build(BuildContext context) {
-    // Shared view model (controller); this screen reads its state and calls its actions.
     final vm = AppServices.of(context).workouts;
+    final theme = Theme.of(context);
     return PopScope<void>(
-      // Block system back until _stop() confirms and stops the tracker.
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
-        // didPop is true after our explicit Navigator.pop; do not ask again.
-        // result is unused because this route returns void.
         if (!didPop) _stop();
       },
       child: AnimatedBuilder(
           animation: vm,
           builder: (context, _) {
-            // Latest live repetition count, used for the large number and progress ring.
             final busy = _busy || vm.isTrackerBusy;
             final disconnected = vm.isDisconnected;
             final error = _error ?? vm.trackerError;
-            final current = vm.liveReps;
-            // Required repetition count from the selected exercise plan.
-            final target = widget.exercise.targetReps;
-            // Whether the target is reached; enables the Finish button.
-            final completed = current >= target;
-            // Repetitions beyond the target, clamped to zero for the extra-reps badge.
-            final extra = current > target ? current - target : 0;
+            final state = vm.trackerStatus?.state;
+            final showFinish = vm.hasPendingResult ||
+                (!disconnected &&
+                    (state == TrackerState.running ||
+                        state == TrackerState.paused ||
+                        state == TrackerState.finished));
             return Scaffold(
               appBar: AppBar(
-                title: const Text('Live Repetitions'),
+                title: Text(widget.exercise.name),
                 leading: IconButton(
                     onPressed: busy ? null : _stop,
+                    tooltip: 'Stop workout',
                     icon: const Icon(Icons.close)),
               ),
-              // Fill tall screens; allow scrolling when controls need more room.
-              body: CustomScrollView(slivers: [
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 25),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(widget.exercise.name,
-                              textAlign: TextAlign.center,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .headlineMedium
-                                  ?.copyWith(fontWeight: FontWeight.w900)),
-                          const SizedBox(height: 8),
-                          Center(
-                              child: FitBadge(
-                                  vm.hasPendingResult
-                                      ? 'Ready to save'
-                                      : disconnected
-                                          ? 'Tracker disconnected'
-                                          : vm.isPaused
-                                              ? 'Paused'
-                                              : completed
-                                                  ? 'Target reached · Keep going'
-                                                  : 'Counting reps',
-                                  highlight: completed && !disconnected,
-                                  icon: disconnected
-                                      ? Icons.bluetooth_disabled
-                                      : vm.isPaused
-                                          ? Icons.pause
-                                          : Icons.bolt)),
-                          const Spacer(),
-                          Center(
-                              child: SizedBox(
-                            height: 250,
-                            width: 250,
-                            child: Stack(fit: StackFit.expand, children: [
-                              CircularProgressIndicator(
-                                  value: target > 0
-                                      ? (current / target).clamp(0.0, 1.0)
-                                      : 0,
-                                  color: FitColors.lime,
-                                  backgroundColor: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                                  strokeWidth: 17,
-                                  strokeCap: StrokeCap.round),
-                              Center(
-                                  child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                    Text('$current',
-                                        style: const TextStyle(
-                                            fontSize: 86,
-                                            fontWeight: FontWeight.w900,
-                                            height: 1)),
-                                    const SizedBox(height: 5),
-                                    Text('of $target target reps'),
-                                    if (extra > 0) ...[
-                                      const SizedBox(height: 12),
-                                      FitBadge('+$extra extra reps',
-                                          highlight: true),
+              body: SafeArea(
+                  top: false,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => SingleChildScrollView(
+                      child: ConstrainedBox(
+                        constraints:
+                            BoxConstraints(minHeight: constraints.maxHeight),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              WorkoutStageView(
+                                status: vm.trackerStatus,
+                                repetitions: vm.liveReps,
+                                target: widget.exercise.targetReps,
+                                disconnected: disconnected,
+                                readyToSave: vm.hasPendingResult,
+                                animate: !busy,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 24),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (vm.connectedDevice != null) ...[
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.bluetooth_connected,
+                                              size: 18,
+                                              color: theme.colorScheme.primary),
+                                          const SizedBox(width: 6),
+                                          Flexible(
+                                              child: Text(
+                                                  vm.connectedDevice!
+                                                      .displayName,
+                                                  style:
+                                                      theme.textTheme.bodySmall,
+                                                  textAlign: TextAlign.center)),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 16),
                                     ],
-                                  ])),
-                            ]),
-                          )),
-                          const Spacer(),
-                          if (vm.connectedDevice != null)
-                            Center(
-                                child: Text(
-                                    'Connected · ${vm.connectedDevice!.displayName}',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant))),
-                          const SizedBox(height: 18),
-                          if (error != null) ...[
-                            Semantics(
-                                liveRegion: true,
-                                child: Text(error,
-                                    style: TextStyle(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .error))),
-                            const SizedBox(height: 12),
-                          ],
-                          if (vm.isTrackerBusy) ...[
-                            const LinearProgressIndicator(),
-                            const SizedBox(height: 12),
-                          ],
-                          if (disconnected && !vm.hasPendingResult) ...[
-                            const Text(
-                                'Counting is interrupted. Reconnect to recover the session, or stop without completing.',
-                                textAlign: TextAlign.center),
-                            const SizedBox(height: 12),
-                            OutlinedButton.icon(
-                                onPressed: busy ? null : _reconnect,
-                                icon: const Icon(Icons.bluetooth_searching),
-                                label: const Text('Reconnect tracker')),
-                          ] else if (!vm.hasPendingResult)
-                            OutlinedButton.icon(
-                              onPressed: busy ||
-                                      !vm.isRunning ||
-                                      !(vm.trackerStatus?.sensorReady ?? false)
-                                  ? null
-                                  : _togglePause,
-                              icon: Icon(
-                                  vm.isPaused ? Icons.play_arrow : Icons.pause),
-                              label: Text(vm.isPaused
-                                  ? 'Resume counting'
-                                  : 'Pause counting'),
-                            ),
-                          const SizedBox(height: 12),
-                          AccentButton(
-                              vm.hasPendingResult
-                                  ? 'Retry saving'
-                                  : 'Finish Exercise',
-                              icon: Icons.check_circle_outline,
-                              onPressed:
-                                  vm.canFinish && !busy ? _finish : null),
-                          const SizedBox(height: 12),
-                          TextButton(
-                              onPressed: busy ? null : _stop,
-                              child: const Text('Stop without completing')),
-                        ]),
-                  ),
-                )
-              ]),
+                                    if (error != null) ...[
+                                      Semantics(
+                                          liveRegion: true,
+                                          child: Text(error,
+                                              style: theme.textTheme.bodyMedium
+                                                  ?.copyWith(
+                                                      color: theme
+                                                          .colorScheme.error))),
+                                      const SizedBox(height: 12),
+                                    ],
+                                    if (vm.isTrackerBusy) ...[
+                                      const LinearProgressIndicator(),
+                                      const SizedBox(height: 16),
+                                    ],
+                                    if (disconnected &&
+                                        !vm.hasPendingResult) ...[
+                                      const Text(
+                                          'Your tracker may still be counting. Reconnect to check and pause it.',
+                                          textAlign: TextAlign.center),
+                                      const SizedBox(height: 12),
+                                      OutlinedButton.icon(
+                                          onPressed: busy ? null : _reconnect,
+                                          icon: const Icon(
+                                              Icons.bluetooth_searching),
+                                          label:
+                                              const Text('Reconnect tracker')),
+                                    ] else if (!vm.hasPendingResult &&
+                                        state != TrackerState.finished &&
+                                        state != TrackerState.error)
+                                      OutlinedButton.icon(
+                                        onPressed: busy || !vm.canTogglePause
+                                            ? null
+                                            : _togglePause,
+                                        icon: Icon(vm.isPaused
+                                            ? Icons.play_arrow
+                                            : Icons.pause),
+                                        label: Text(vm.isPaused
+                                            ? 'Resume workout'
+                                            : 'Pause workout'),
+                                      ),
+                                    if (showFinish) ...[
+                                      const SizedBox(height: 12),
+                                      AccentButton(
+                                          vm.hasPendingResult
+                                              ? 'Retry saving'
+                                              : 'Finish Exercise',
+                                          icon: Icons.check_circle_outline,
+                                          onPressed: vm.canFinish && !busy
+                                              ? _finish
+                                              : null),
+                                    ],
+                                    const SizedBox(height: 10),
+                                    TextButton(
+                                        onPressed: busy ? null : _stop,
+                                        child: const Text(
+                                            'Stop without completing')),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  )),
             );
           }),
     );

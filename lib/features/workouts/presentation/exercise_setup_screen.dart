@@ -1,13 +1,12 @@
-// Connects a real tracker, selects its movement profile, and starts a ready exercise.
+// Connects a tracker and starts one session that learns and counts the movement.
 // Imported by workout_detail_screen.dart and exercise_complete_screen.dart.
 import 'package:flutter/material.dart';
 
 import '../../../app/app_services.dart';
-import '../../../app/fittracker_theme.dart';
 import '../../../core/widgets/fit_widgets.dart';
 import '../../tracker/domain/tracker_device.dart';
+import '../../tracker/domain/tracker_status.dart';
 import '../domain/workout_models.dart';
-import 'calibration_screen.dart';
 import 'live_exercise_screen.dart';
 
 /// Preparation route opened from workout details or the preceding completion.
@@ -27,6 +26,7 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
   /// Local actions disable controls until their awaited BLE command completes.
   bool _busy = false;
   bool _choosing = false;
+  bool _scanning = false;
   bool _hasScanned = false;
   List<TrackerDevice> _devices = [];
   String? _lastError;
@@ -34,10 +34,13 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
   @override
   void initState() {
     super.initState();
-    // A connection is reusable, but each exercise must select its own profile.
+    // A connection is reusable; selection is stored only in the phone.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && AppServices.of(context).workouts.connectedDevice != null) {
+      if (!mounted) return;
+      if (AppServices.of(context).workouts.connectedDevice != null) {
         _prepare();
+      } else {
+        _scan();
       }
     });
   }
@@ -48,7 +51,7 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
     setState(() => _lastError = error.toString());
   }
 
-  /// Refreshes the selected movement and reads its persisted calibration status.
+  /// Selects the movement locally and reads the current device state.
   Future<void> _prepare() async {
     final vm = AppServices.of(context).workouts;
     if (_busy || vm.isTrackerBusy) return;
@@ -71,6 +74,7 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
     if (_busy || vm.isTrackerBusy) return;
     setState(() {
       _busy = true;
+      _scanning = true;
       _choosing = true;
       _lastError = null;
     });
@@ -85,11 +89,16 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
     } catch (error) {
       _error(error);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _scanning = false;
+        });
+      }
     }
   }
 
-  /// A device is usable only after discovery/subscription and movement selection.
+  /// Waits for discovery, subscriptions and the current device snapshot.
   Future<void> _connect(TrackerDevice device) async {
     final vm = AppServices.of(context).workouts;
     if (_busy || vm.isTrackerBusy) return;
@@ -108,7 +117,7 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
     }
   }
 
-  /// Start waits for the wearable's acknowledgement before opening live counting.
+  /// START acknowledgement opens pickup/calibration guidance in the live screen.
   Future<void> _start() async {
     final vm = AppServices.of(context).workouts;
     if (_busy || vm.isTrackerBusy || !vm.canStartExercise(widget.exercise)) {
@@ -135,221 +144,199 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
     }
   }
 
-  /// Calibration reports live reference reps; returning rechecks the profile.
-  Future<void> _calibrate() async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => CalibrationScreen(exercise: widget.exercise),
-    ));
-    if (mounted && AppServices.of(context).workouts.connectedDevice != null) {
-      await _prepare();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final vm = AppServices.of(context).workouts;
+    final theme = Theme.of(context);
     return AnimatedBuilder(
-        animation: vm,
-        builder: (context, _) {
-          final device = vm.connectedDevice;
-          final busy = _busy || vm.isTrackerBusy;
-          final showPicker = device == null || _choosing;
-          final calibrated = vm.isCalibrated(widget.exercise);
-          final sensorReady = vm.trackerStatus?.sensorReady ?? false;
-          final error = _lastError ?? vm.trackerError;
-          return PopScope<void>(
-            // Avoid leaving while START is in flight and abandoning a running sensor.
-            canPop: !busy,
-            child: Scaffold(
-              appBar: AppBar(title: const Text('Exercise Setup')),
-              body: ListView(
-                  padding: const EdgeInsets.fromLTRB(22, 10, 22, 30),
-                  children: [
-                    const Text('PREPARE YOUR MOVEMENT',
-                        style: TextStyle(
-                            color: FitColors.peach,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1.4)),
-                    const SizedBox(height: 8),
-                    SectionHeading(widget.exercise.name,
-                        subtitle: widget.exercise.coachTip),
-                    const SizedBox(height: 23),
-                    FitCard(
-                        child: Row(children: [
-                      const Icon(Icons.track_changes,
-                          color: FitColors.lime, size: 33),
-                      const SizedBox(width: 13),
-                      Expanded(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            const Text('TARGET',
-                                style: TextStyle(
-                                    fontSize: 11, fontWeight: FontWeight.w800)),
-                            Text('${widget.exercise.targetReps} repetitions',
-                                style: const TextStyle(
-                                    fontSize: 20, fontWeight: FontWeight.w900)),
-                          ])),
-                    ])),
-                    if (error != null) ...[
-                      const SizedBox(height: 16),
-                      Semantics(
-                          liveRegion: true,
-                          child: Text(error,
-                              style: TextStyle(
-                                  color: Theme.of(context).colorScheme.error))),
-                    ],
-                    if (busy) ...[
-                      const SizedBox(height: 18),
-                      const LinearProgressIndicator(),
-                      const SizedBox(height: 8),
-                      const Text('Waiting for your tracker…',
-                          textAlign: TextAlign.center),
-                    ],
-                    const SizedBox(height: 23),
-                    if (showPicker) ...[
-                      const Text('1. Connect Your Device',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w900)),
-                      const SizedBox(height: 12),
-                      const Text(
-                          'Turn on your tracker and keep it nearby. Select your device from the scan results.'),
-                      const SizedBox(height: 12),
-                      if (_hasScanned && _devices.isEmpty && !busy) ...[
-                        const FitCard(
-                            child: Text(
-                                'No compatible trackers found. Check that your tracker is powered on and is not connected to another phone, then scan again.')),
-                        const SizedBox(height: 12),
-                      ],
-                      for (final item in _devices) ...[
-                        FitCard(
-                            onTap: busy ? null : () => _connect(item),
-                            child: Row(children: [
-                              const Icon(Icons.bluetooth,
-                                  color: FitColors.lime),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                  child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                    Text(
-                                        item.name.isEmpty
-                                            ? 'Fitness tracker'
-                                            : item.name,
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w900)),
-                                    Text(item.id,
-                                        style: const TextStyle(fontSize: 12)),
-                                    if (item.batteryPercent != null)
-                                      Text('${item.batteryPercent}% battery',
-                                          style: const TextStyle(fontSize: 12)),
-                                  ])),
-                              const Icon(Icons.chevron_right),
-                            ])),
-                        const SizedBox(height: 10),
-                      ],
-                      AccentButton(
-                          _hasScanned ? 'Scan again' : 'Scan for devices',
-                          onPressed: busy ? null : _scan,
-                          icon: Icons.bluetooth_searching),
-                      if (device != null) ...[
-                        const SizedBox(height: 12),
-                        TextButton(
-                            onPressed: busy
-                                ? null
-                                : () => setState(() => _choosing = false),
-                            child: const Text('Keep current device')),
-                      ],
-                    ] else ...[
-                      FitCard(
-                          child: Row(children: [
-                        const Icon(Icons.bluetooth_connected,
-                            color: FitColors.lime),
-                        const SizedBox(width: 13),
-                        Expanded(
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                              Text(
-                                  device.name.isEmpty
-                                      ? 'Device connected'
-                                      : device.name,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w900)),
-                              const SizedBox(height: 4),
-                              Text(device.id,
-                                  style: const TextStyle(fontSize: 12)),
-                            ])),
-                        TextButton(
-                            onPressed: busy ? null : _scan,
-                            child: const Text('Change')),
-                      ])),
-                      const SizedBox(height: 23),
-                      const Text('2. Calibrate Movement',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w900)),
-                      const SizedBox(height: 12),
-                      FitCard(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            Row(children: [
-                              Icon(
-                                  calibrated
-                                      ? Icons.verified
-                                      : Icons.info_outline,
-                                  color: calibrated
-                                      ? FitColors.lime
-                                      : FitColors.peach),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                  child: Text(
-                                      calibrated
-                                          ? 'Calibration saved on your tracker'
-                                          : 'Calibrate this movement before starting',
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w800))),
-                            ]),
-                            const SizedBox(height: 12),
-                            const Text(
-                                'Calibration is specific to this tracker and movement. Recalibrate if you change the sensor placement.',
-                                style: TextStyle(fontSize: 12)),
-                            if (!sensorReady) ...[
-                              const SizedBox(height: 12),
-                              const Text(
-                                  'The movement sensor is not ready. Check its connection and keep the tracker still, then check again.'),
-                            ],
-                            const SizedBox(height: 14),
-                            OutlinedButton.icon(
-                                onPressed:
-                                    busy || !sensorReady ? null : _calibrate,
-                                icon: const Icon(Icons.tune),
-                                label: Text(calibrated
-                                    ? 'Recalibrate'
-                                    : 'Calibrate now')),
-                            TextButton(
-                                onPressed: busy ? null : _prepare,
-                                child: const Text('Check tracker again')),
-                          ])),
-                      const SizedBox(height: 25),
-                      AccentButton('Start Exercise',
-                          onPressed:
-                              !busy && vm.canStartExercise(widget.exercise)
-                                  ? _start
-                                  : null,
-                          icon: Icons.play_arrow_rounded),
-                      if (!calibrated) ...[
-                        const SizedBox(height: 8),
-                        const Text(
-                            'Start unlocks after the tracker confirms calibration.',
-                            textAlign: TextAlign.center),
-                      ],
-                    ],
-                  ]),
+      animation: vm,
+      builder: (context, _) {
+        final device = vm.connectedDevice;
+        final busy = _busy || vm.isTrackerBusy;
+        final showPicker = device == null || _choosing;
+        final error = _lastError ?? vm.trackerError;
+        return PopScope<void>(
+          // Avoid leaving while START is in flight and abandoning a running sensor.
+          canPop: !busy,
+          child: Scaffold(
+            appBar: AppBar(title: const Text('Get ready')),
+            body: SafeArea(
+              top: false,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(22, 12, 22, 28),
+                children: [
+                  Text(widget.exercise.name,
+                      style: theme.textTheme.headlineSmall),
+                  const SizedBox(height: 8),
+                  Text('${widget.exercise.targetReps} rep goal',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant)),
+                  const SizedBox(height: 24),
+                  FitCard(
+                    padding: const EdgeInsets.all(22),
+                    child: AnimatedSwitcher(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : const Duration(milliseconds: 280),
+                      child: showPicker
+                          ? _devicePicker(busy, device != null)
+                          : _readyToStart(
+                              device,
+                              busy,
+                              vm.canStartExercise(widget.exercise),
+                              vm.trackerStatus?.state.isActive == true ||
+                                  vm.trackerStatus?.state ==
+                                      TrackerState.paused),
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 20),
+                    Semantics(
+                        liveRegion: true,
+                        child: Text(error,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(color: theme.colorScheme.error))),
+                  ],
+                ],
+              ),
             ),
-          );
-        });
+          ),
+        );
+      },
+    );
+  }
+
+  /// Connection is the only step shown until a device is ready.
+  Widget _devicePicker(bool busy, bool hasConnection) {
+    final theme = Theme.of(context);
+    return Column(
+      key: const ValueKey('device-picker'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _stageIcon(Icons.bluetooth_searching, loading: busy),
+        const SizedBox(height: 22),
+        Text(_scanning ? 'Finding your tracker…' : 'Connect your tracker',
+            textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
+        const SizedBox(height: 10),
+        Text(
+            _scanning
+                ? 'Keep it switched on and nearby.'
+                : _devices.isEmpty
+                    ? 'Switch on your tracker to get started.'
+                    : 'Tap your tracker to connect.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyLarge
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 24),
+        if (_hasScanned && _devices.isEmpty && !busy) ...[
+          const Text('No compatible trackers found. Move closer and try again.',
+              textAlign: TextAlign.center),
+          const SizedBox(height: 20),
+        ],
+        for (final item in _devices) ...[
+          OutlinedButton(
+            onPressed: busy ? null : () => _connect(item),
+            style: OutlinedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16)),
+            child: Row(children: [
+              const Icon(Icons.sensors, size: 28),
+              const SizedBox(width: 14),
+              Expanded(
+                  child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(item.name.isEmpty ? 'Fitness tracker' : item.name,
+                      style: theme.textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(item.id, style: theme.textTheme.bodySmall),
+                  if (item.batteryPercent != null)
+                    Text('${item.batteryPercent}% battery',
+                        style: theme.textTheme.bodySmall),
+                ],
+              )),
+              const Icon(Icons.chevron_right),
+            ]),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (!busy)
+          if (_devices.isEmpty)
+            AccentButton(_hasScanned ? 'Scan again' : 'Scan for devices',
+                onPressed: _scan, icon: Icons.refresh)
+          else
+            TextButton.icon(
+                onPressed: _scan,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Scan again')),
+        if (busy && !_scanning)
+          const Text('Connecting…', textAlign: TextAlign.center),
+        if (hasConnection)
+          TextButton(
+              onPressed: busy ? null : () => setState(() => _choosing = false),
+              child: const Text('Keep current device')),
+      ],
+    );
+  }
+
+  /// Connection success reveals one primary action, without another checklist.
+  Widget _readyToStart(
+      TrackerDevice device, bool busy, bool canStart, bool unfinishedSession) {
+    final theme = Theme.of(context);
+    return Column(
+      key: const ValueKey('tracker-ready'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _stageIcon(Icons.check_rounded, loading: busy),
+        const SizedBox(height: 22),
+        Text(busy ? 'Getting ready…' : 'You’re connected',
+            textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
+        const SizedBox(height: 10),
+        Text(
+            'Secure the sensor to your equipment. We’ll guide you as you move.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyLarge
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 24),
+        Row(children: [
+          Icon(Icons.bluetooth_connected, color: theme.colorScheme.primary),
+          const SizedBox(width: 10),
+          Expanded(
+              child:
+                  Text(device.displayName, style: theme.textTheme.titleMedium)),
+          TextButton(
+              onPressed: busy ? null : _scan, child: const Text('Change')),
+        ]),
+        if (unfinishedSession) ...[
+          const SizedBox(height: 12),
+          const Text(
+              'Starting replaces the unfinished session on this tracker.'),
+        ],
+        const SizedBox(height: 24),
+        AccentButton('Start Exercise',
+            onPressed: !busy && canStart ? _start : null,
+            icon: Icons.play_arrow_rounded),
+        if (!busy && !canStart)
+          TextButton(
+              onPressed: _prepare, child: const Text('Check connection')),
+      ],
+    );
+  }
+
+  Widget _stageIcon(IconData icon, {required bool loading}) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Center(
+        child: SizedBox.square(
+      dimension: 96,
+      child: Stack(alignment: Alignment.center, children: [
+        Container(
+            decoration: BoxDecoration(
+                shape: BoxShape.circle, color: color.withValues(alpha: 0.1))),
+        Icon(icon, size: 44, color: color),
+        if (loading)
+          const Positioned.fill(
+              child: CircularProgressIndicator(strokeWidth: 3)),
+      ]),
+    ));
   }
 }

@@ -6,7 +6,6 @@
 // - lib/features/meals/presentation/meals_screen.dart
 // - lib/features/profile/presentation/profile_screen.dart
 // - lib/features/progress/presentation/progress_screen.dart
-// - lib/features/workouts/presentation/calibration_screen.dart
 // - lib/features/workouts/presentation/exercise_complete_screen.dart
 // - lib/features/workouts/presentation/exercise_setup_screen.dart
 // - lib/features/workouts/presentation/live_exercise_screen.dart
@@ -106,13 +105,14 @@ class FitBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(30),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (icon != null) ...[Icon(icon, size: 13), const SizedBox(width: 5)],
-        Text(label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              color: highlight ? FitColors.ink : null,
-            )),
+        if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 6)],
+        Flexible(
+            child: Text(label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: highlight ? FitColors.ink : null,
+                ))),
       ]),
     );
   }
@@ -139,7 +139,7 @@ class AccentButton extends StatelessWidget {
         onPressed: onPressed,
         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           if (icon != null) ...[Icon(icon, size: 19), const SizedBox(width: 8)],
-          Text(label),
+          Flexible(child: Text(label, textAlign: TextAlign.center)),
         ]),
       );
 }

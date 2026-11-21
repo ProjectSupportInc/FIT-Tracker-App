@@ -1,31 +1,25 @@
 import 'dart:async';
 import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:repform_app/features/tracker/data/ble_tracker_gateway.dart';
 import 'package:repform_app/features/tracker/data/ble_transport.dart';
 import 'package:repform_app/features/tracker/domain/tracker_device.dart';
 import 'package:repform_app/features/tracker/domain/tracker_status.dart';
 
-/// These bytes deliberately come from a tiny fake peripheral, not the app codec.
+// Independent peripheral byte fixtures: do not encode responses with the app codec.
 List<int> _status(
     {int state = 0,
-    int flags = 2,
-    int result = 0,
+    int event = 0,
+    int detail = 0,
     int request = 0,
-    int exercise = 0,
-    int reps = 0,
-    int samples = 0}) {
-  final bytes = ByteData(16)
+    int reps = 0}) {
+  final bytes = ByteData(8)
     ..setUint8(0, 1)
     ..setUint8(1, state)
-    ..setUint8(2, flags)
-    ..setUint8(3, result)
+    ..setUint8(2, event)
+    ..setUint8(3, detail)
     ..setUint16(4, request, Endian.little)
-    ..setUint16(6, exercise, Endian.little)
-    ..setUint32(8, reps, Endian.little)
-    ..setUint8(12, samples)
-    ..setUint8(13, 3);
+    ..setUint16(6, reps, Endian.little);
   return bytes.buffer.asUint8List();
 }
 
@@ -35,9 +29,8 @@ class _Peripheral implements BleTransport {
   final disconnectController = StreamController<void>.broadcast(sync: true);
   final writes = <List<int>>[];
   Future<void> Function(List<int>)? onWrite;
-  int disconnectCalls = 0;
   List<int> snapshot = _status();
-
+  int disconnectCalls = 0;
   @override
   Stream<List<int>> get statusPackets => statusController.stream;
   @override
@@ -46,7 +39,7 @@ class _Peripheral implements BleTransport {
   Stream<void> get disconnections => disconnectController.stream;
   @override
   Future<List<TrackerDevice>> scan() async =>
-      const [TrackerDevice(id: 'esp32', name: 'FitnessTracker')];
+      const [TrackerDevice(id: 'esp32')];
   @override
   Future<void> connect(TrackerDevice device) async {}
   @override
@@ -54,16 +47,45 @@ class _Peripheral implements BleTransport {
   @override
   Future<void> writeControl(List<int> packet) async {
     writes.add(List.of(packet));
-    if (onWrite != null) {
-      await onWrite!(packet);
-      return;
-    }
-    final response = List<int>.of(snapshot);
-    response[4] = packet[2];
-    response[5] = packet[3];
-    statusController.add(response);
+    if (onWrite != null) return onWrite!(packet);
+    final state = switch (packet[1]) {
+      1 => 1,
+      2 => 5,
+      3 => 4,
+      4 => 0,
+      5 => 6,
+      _ => snapshot[1],
+    };
+    reply(packet,
+        state: state,
+        reps: packet[1] == 1 || packet[1] == 4
+            ? 0
+            : snapshot[6] | snapshot[7] << 8);
   }
 
+  int request(List<int> packet) => packet[2] | packet[3] << 8;
+  void reply(List<int> packet,
+      {int state = 1,
+      int reps = 0,
+      int? event,
+      int detail = 0,
+      int? requestId}) {
+    snapshot = _status(
+        state: state,
+        reps: reps,
+        event: event ?? (packet[1] == 6 ? 0 : 1),
+        detail: detail,
+        request: requestId ?? request(packet));
+    statusController.add(snapshot);
+  }
+
+  void publish({int state = 0, int event = 0, int detail = 0, int reps = 0}) {
+    snapshot = _status(state: state, event: event, detail: detail, reps: reps);
+    statusController.add(snapshot);
+  }
+
+  void rep(int count) => repController
+      .add([1, 1, count & 255, count >> 8, 0x78, 0x56, 0x34, 0x12]);
   @override
   Future<void> disconnect() async {
     disconnectCalls++;
@@ -75,35 +97,6 @@ class _Peripheral implements BleTransport {
     await repController.close();
     await disconnectController.close();
   }
-
-  int request(List<int> packet) => packet[2] | packet[3] << 8;
-  int exercise(List<int> packet) => packet[4] | packet[5] << 8;
-  void reply(List<int> packet,
-      {int state = 3, int flags = 3, int result = 0, int reps = 0}) {
-    snapshot = _status(
-        state: state,
-        flags: flags,
-        result: result,
-        request: request(packet),
-        exercise: exercise(packet),
-        reps: reps);
-    statusController.add(snapshot);
-  }
-
-  void rep(int exercise, int count) => repController.add([
-        1,
-        1,
-        exercise,
-        0,
-        count & 255,
-        count >> 8 & 255,
-        count >> 16 & 255,
-        count >> 24 & 255,
-        1,
-        0,
-        0,
-        0,
-      ]);
 }
 
 void main() {
@@ -118,171 +111,175 @@ void main() {
     addTearDown(gateway.dispose);
   });
 
-  test(
-      'Connection reads current status then requests a fresh acknowledged status',
-      () {
-    expect(gateway.connectedDevice!.id, 'esp32');
+  test('Connect reads status and sends GET_STATUS, no exercise selection', () {
     expect(gateway.status!.state, TrackerState.idle);
     expect(peripheral.writes.single, [1, 6, 1, 0, 0, 0, 0, 0]);
   });
-
-  test(
-      'Only matching request IDs acknowledge an action; unsolicited progress does not',
+  test('START, PAUSE, RESUME, FINISH and RESET use distinct new opcodes',
+      () async {
+    await gateway.startCounting();
+    expect(gateway.status!.state, TrackerState.waitPickup);
+    peripheral.publish(state: 4, event: 7, reps: 3);
+    await gateway.pauseCounting();
+    await gateway.resumeCounting();
+    await gateway.stopCounting();
+    expect(gateway.status!.state, TrackerState.finished);
+    await gateway.reset();
+    expect(gateway.status!.repetitions, 0);
+    expect(peripheral.writes.map((p) => p[1]), [6, 1, 2, 3, 6, 5, 4]);
+    expect(
+        peripheral.writes.every((p) => p.skip(4).every((v) => v == 0)), isTrue);
+    expect(peripheral.writes.map(peripheral.request).toSet().length,
+        peripheral.writes.length);
+  });
+  test('Only matching request ID and reply event acknowledge commands',
       () async {
     final written = Completer<List<int>>();
-    peripheral.onWrite = (bytes) async {
-      written.complete(bytes);
+    peripheral.onWrite = (p) async {
+      written.complete(p);
     };
-    var completed = false;
-    final selection = gateway
-        .selectExercise(exerciseKind: 'curl')
-        .then((_) => completed = true);
-    final command = await written.future;
+    var done = false;
+    final start = gateway.startCounting().then((_) => done = true);
+    final packet = await written.future;
+    peripheral.publish(state: 1); // unsolicited heartbeat
     peripheral.statusController
-        .add(_status(state: 3, flags: 3, exercise: 1, request: 65000));
-    peripheral.statusController.add(_status(state: 1, exercise: 1));
+        .add(_status(state: 1, event: 1, request: 65000));
+    peripheral.statusController
+        .add(_status(state: 1, request: peripheral.request(packet)));
     await Future<void>.delayed(Duration.zero);
-    expect(completed, isFalse);
-    expect(gateway.status!.state, TrackerState.selected);
-    peripheral.reply(command);
-    await selection;
-    expect(gateway.status!.profileAvailable, isTrue);
+    expect(done, isFalse);
+    peripheral.reply(packet);
+    await start;
+    expect(done, isTrue);
   });
-
   test(
-      'Firmware rejection reaches the caller and does not claim calibration exists',
+      'Current firmware wrong ACK request ID is reported, never silently accepted',
       () async {
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes, state: 1, flags: 2, result: 3);
+    peripheral.onWrite = (p) async {
+      peripheral.reply(p, requestId: p[1]);
     };
-    await expectLater(gateway.selectExercise(exerciseKind: 'curl'),
-        throwsA(isA<TrackerException>()));
-    expect(gateway.status!.profileAvailable, isFalse);
+    await expectLater(
+        gateway.startCounting(),
+        throwsA(isA<TrackerException>()
+            .having((e) => e.message, 'message', contains('command number'))));
+    expect(gateway.connectedDevice, isNull);
+  });
+  test('Wrong-event reply with the correct request ID still times out',
+      () async {
+    peripheral.onWrite = (p) async {
+      peripheral.reply(p, event: 0);
+    };
+    await expectLater(
+        gateway.startCounting(), throwsA(isA<TrackerException>()));
+    expect(gateway.connectedDevice, isNull);
+  });
+  test('Rejection detail is a result code, not a calibration count', () async {
+    peripheral.onWrite = (p) async {
+      peripheral.reply(p, state: 0, event: 2, detail: 2);
+    };
+    await expectLater(
+        gateway.startCounting(),
+        throwsA(isA<TrackerException>()
+            .having((e) => e.message, 'message', contains('busy'))));
     expect(gateway.connectedDevice, isNotNull);
   });
-
   test(
-      'Calibration progress and saved profile are firmware status, not workout reps',
+      'Calibration events survive heartbeats; reset clears them; template adds three reps',
       () async {
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes, state: bytes[1] == 2 ? 2 : 1, flags: 2);
-    };
-    await gateway.selectExercise(exerciseKind: 'curl');
-    await gateway.beginCalibration(exerciseKind: 'curl');
-    final counts = <int>[];
-    final subscription = gateway.repetitionCounts.listen(counts.add);
-    addTearDown(subscription.cancel);
-    peripheral.statusController.add(_status(state: 2, exercise: 1, samples: 2));
-    peripheral.rep(1, 2);
-    await Future<void>.delayed(Duration.zero);
+    await gateway.startCounting();
+    peripheral.publish(state: 2, event: 3);
+    peripheral.publish(state: 3, event: 4);
+    peripheral.publish(state: 3, event: 5, detail: 1);
+    peripheral.publish(state: 3);
+    expect(gateway.status!.calibrationReps, 1);
+    peripheral.publish(state: 3, event: 5, detail: 2);
     expect(gateway.status!.calibrationReps, 2);
-    expect(counts, isEmpty);
-    peripheral.statusController
-        .add(_status(state: 3, flags: 3, exercise: 1, samples: 3));
-    expect(gateway.status!.state, TrackerState.ready);
-    expect(gateway.status!.profileAvailable, isTrue);
+    peripheral.publish(state: 2, event: 6);
+    expect(gateway.status!.calibrationReps, 0);
+    peripheral.publish(state: 3, event: 4);
+    peripheral.publish(state: 4, event: 7, reps: 3);
+    expect(gateway.status!.calibrationReps, 3);
+    expect(gateway.status!.repetitions, 3);
+    peripheral.publish(state: 4, reps: 4);
+    expect(gateway.status!.calibrationReps, 3);
   });
-
+  test('Known firmware CAL_RESET detail=2 is not invented as a successful rep',
+      () {
+    peripheral.publish(state: 3, event: 5, detail: 1);
+    peripheral.publish(state: 3, event: 6, detail: 2);
+    expect(gateway.status!.calibrationReps, 0);
+    expect(gateway.connectedDevice, isNotNull);
+  });
   test(
-      'Commands serialize, pause/resume preserve reps, FINISH reports final total',
+      'Telemetry cannot count before template lock and ignores decreasing totals',
       () async {
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes);
-    };
-    await gateway.selectExercise(exerciseKind: 'curl');
-    final started = Completer<List<int>>();
-    peripheral.onWrite = (bytes) async {
-      if (bytes[1] == 3) {
-        started.complete(bytes);
-      } else {
-        peripheral.reply(bytes, state: 5, reps: 8);
-      }
-    };
-    final start = gateway.startCounting(exerciseKind: 'curl');
-    final pause = gateway.pauseCounting();
-    final startPacket = await started.future;
-    expect(peripheral.writes.last[1], 3);
-    peripheral.reply(startPacket, state: 4);
-    await start;
-    await pause;
-    expect(peripheral.writes.last[1], 4);
+    await gateway.startCounting();
+    peripheral.rep(5);
+    expect(gateway.status!.repetitions, 0);
+    peripheral.publish(state: 4, event: 7, reps: 3);
+    peripheral.rep(8);
     expect(gateway.status!.repetitions, 8);
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes, state: bytes[1] == 3 ? 4 : 3, reps: 9);
-    };
-    await gateway.resumeCounting();
-    expect(peripheral.writes.last[1], 3);
-    await gateway.stopCounting();
-    expect(peripheral.writes.last[1], 5);
-    expect(gateway.status!.repetitions, 9);
+    peripheral.rep(7);
+    expect(gateway.status!.repetitions, 8);
   });
-
-  test('Telemetry accepts only selected exercise and ignores decreasing totals',
+  test('FINISH retry queries a finished device without sending another FINISH',
       () async {
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes, state: bytes[1] == 3 ? 4 : 3);
-    };
-    await gateway.selectExercise(exerciseKind: 'curl');
-    await gateway.startCounting(exerciseKind: 'curl');
-    final counts = <int>[];
-    final subscription = gateway.repetitionCounts.listen(counts.add);
-    addTearDown(subscription.cancel);
-    peripheral.rep(1, 8);
-    peripheral.rep(2, 55);
-    peripheral.rep(1, 3);
-    peripheral.rep(1, 9);
-    await Future<void>.delayed(Duration.zero);
-    expect(counts, [8, 9]);
+    peripheral.publish(state: 6, reps: 12);
+    await gateway.stopCounting();
+    expect(gateway.status!.repetitions, 12);
+    expect(peripheral.writes.map((p) => p[1]), [6, 6]);
   });
-
+  test('A rebooted idle device is not claimed to have finished', () async {
+    peripheral.publish(state: 0);
+    await gateway.stopCounting();
+    expect(gateway.status!.state, TrackerState.idle);
+    expect(peripheral.writes.map((p) => p[1]), [6, 6]);
+  });
   test(
-      'Disconnect fails pending and queued actions, clears stale device/status',
+      'Disconnect fails pending and queued commands without sending them to a new link',
       () async {
     final written = Completer<void>();
     peripheral.onWrite = (_) async {
       written.complete();
     };
-    final selection = gateway.selectExercise(exerciseKind: 'curl');
-    final refresh = gateway.refreshStatus();
-    final selectionError =
-        expectLater(selection, throwsA(isA<TrackerException>()));
-    final refreshError = expectLater(refresh, throwsA(isA<TrackerException>()));
+    final start = gateway.startCounting();
+    final pause = gateway.pauseCounting();
+    final checkStart = expectLater(start, throwsA(isA<TrackerException>()));
+    final checkPause = expectLater(pause, throwsA(isA<TrackerException>()));
     await written.future;
     peripheral.disconnectController.add(null);
-    await selectionError;
-    await refreshError;
-    expect(gateway.connectedDevice, isNull);
-    expect(gateway.status, isNull);
-    expect(peripheral.writes.length, 2);
-  });
-
-  test('Missing ACK times out and disconnects without retrying the command',
-      () async {
-    peripheral.onWrite = (_) async {};
-    final before = peripheral.disconnectCalls;
-    await expectLater(gateway.selectExercise(exerciseKind: 'curl'),
-        throwsA(isA<TrackerException>()));
-    expect(peripheral.disconnectCalls, greaterThan(before));
-    expect(peripheral.writes.length, 2);
-    expect(gateway.connectedDevice, isNull);
-  });
-
-  test('Malformed notification terminates the uncertain BLE session', () async {
-    peripheral.statusController.add([1, 2]);
-    await Future<void>.delayed(Duration.zero);
-    expect(gateway.connectedDevice, isNull);
+    await Future.wait([checkStart, checkPause]);
+    expect(peripheral.writes.map((p) => p[1]), [6, 1]);
     expect(gateway.status, isNull);
   });
-
   test(
-      'A queried sensor fault stays visible without breaking the BLE connection',
+      'GATT rejection (including firmware missing RESUME) closes uncertain link',
       () async {
-    peripheral.onWrite = (bytes) async {
-      peripheral.reply(bytes, state: 5, flags: 1, result: 5, reps: 4);
+    peripheral.publish(state: 5, reps: 8);
+    peripheral.onWrite = (_) async {
+      throw const TrackerException('GATT rejected write');
     };
+    await expectLater(
+        gateway.resumeCounting(), throwsA(isA<TrackerException>()));
+    expect(peripheral.writes.last[1], 3);
+    expect(gateway.connectedDevice, isNull);
+  });
+  test('Malformed packets close the connection and fail a pending command',
+      () async {
+    peripheral.onWrite = (_) async {
+      peripheral.statusController.add([1, ...List.filled(15, 0)]);
+    };
+    await expectLater(
+        gateway.startCounting(), throwsA(isA<TrackerException>()));
+    expect(gateway.connectedDevice, isNull);
+  });
+  test('Sensor error is retained for the UI and RESET remains available',
+      () async {
+    peripheral.publish(state: 7, event: 8);
     await gateway.refreshStatus();
+    expect(gateway.status!.state, TrackerState.error);
     expect(gateway.connectedDevice, isNotNull);
-    expect(gateway.status!.result, 5);
-    expect(gateway.status!.sensorReady, isFalse);
+    await gateway.reset();
+    expect(gateway.status!.state, TrackerState.idle);
   });
 }

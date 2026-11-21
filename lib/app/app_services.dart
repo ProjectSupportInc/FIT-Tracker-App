@@ -6,7 +6,6 @@
 // - lib/features/home/presentation/today_screen.dart
 // - lib/features/profile/presentation/profile_screen.dart
 // - lib/features/progress/presentation/progress_screen.dart
-// - lib/features/workouts/presentation/calibration_screen.dart
 // - lib/features/workouts/presentation/exercise_complete_screen.dart
 // - lib/features/workouts/presentation/exercise_setup_screen.dart
 // - lib/features/workouts/presentation/live_exercise_screen.dart

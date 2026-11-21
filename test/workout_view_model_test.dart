@@ -1,133 +1,50 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:repform_app/features/tracker/data/tracker_gateway.dart';
+import 'package:repform_app/features/tracker/data/mock_tracker_gateway.dart';
 import 'package:repform_app/features/tracker/domain/tracker_device.dart';
 import 'package:repform_app/features/tracker/domain/tracker_status.dart';
 import 'package:repform_app/features/workouts/data/workout_repository.dart';
 import 'package:repform_app/features/workouts/domain/workout_models.dart';
 import 'package:repform_app/features/workouts/presentation/workout_view_model.dart';
 
-/// Deterministic peripheral: tests choose when real-looking status/rep events arrive.
-class TestTracker implements TrackerGateway {
-  final controller = StreamController<int>.broadcast(sync: true);
-  final statusController =
-      StreamController<TrackerStatus?>.broadcast(sync: true);
-  final profiles = <int>{};
-  TrackerDevice? device;
-  TrackerStatus? _status;
+/// Deterministic peripheral with controllable command failures and reconnects.
+class TestTracker extends MockTrackerGateway {
   TrackerStatus? restoredOnConnect;
   int stopCalls = 0;
   int startCalls = 0;
+  int resumeCalls = 0;
+  int resetCalls = 0;
   bool failStop = false;
 
   @override
-  Stream<int> get repetitionCounts => controller.stream;
-  @override
-  Stream<TrackerStatus?> get statuses => statusController.stream;
-  @override
-  TrackerStatus? get status => _status;
-  @override
-  TrackerDevice? get connectedDevice => device;
-
-  void emitStatus(TrackerStatus? value) {
-    if (value == null) device = null;
-    _status = value;
-    statusController.add(value);
-  }
-
-  void publish(TrackerState state, {int? exerciseId, int? reps, int? calReps}) {
-    final id = exerciseId ?? _status?.exerciseId ?? 0;
-    emitStatus(TrackerStatus(
-        state: state,
-        exerciseId: id,
-        sensorReady: true,
-        profileAvailable: profiles.contains(id),
-        repetitions: reps ?? _status?.repetitions ?? 0,
-        calibrationReps: calReps ?? _status?.calibrationReps ?? 0));
-  }
-
-  void emitReps(int count) {
-    publish(_status?.state ?? TrackerState.running, reps: count);
-    controller.add(count);
-  }
-
-  void completeCalibration() {
-    profiles.add(_status!.exerciseId);
-    publish(TrackerState.ready, calReps: 3);
-  }
-
-  @override
-  Future<List<TrackerDevice>> scan() async =>
-      const [TrackerDevice(id: 'FT-01', name: 'Test tracker')];
-  @override
   Future<void> connect(TrackerDevice next) async {
-    device = next;
-    _status = restoredOnConnect ?? _status;
-    _status ??= const TrackerStatus(
-        state: TrackerState.idle,
-        exerciseId: 0,
-        sensorReady: true,
-        profileAvailable: false,
-        repetitions: 0,
-        calibrationReps: 0);
-    statusController.add(_status);
+    await super.connect(next);
+    if (restoredOnConnect != null) emitStatus(restoredOnConnect);
   }
 
   @override
-  Future<void> disconnect() async {
-    emitStatus(null);
-  }
-
-  @override
-  Future<void> selectExercise({required String exerciseKind}) async {
-    final id = exerciseIdForKind(exerciseKind);
-    publish(profiles.contains(id) ? TrackerState.ready : TrackerState.selected,
-        exerciseId: id, reps: 0, calReps: profiles.contains(id) ? 3 : 0);
-  }
-
-  @override
-  Future<void> beginCalibration({required String exerciseKind}) async {
-    profiles.remove(exerciseIdForKind(exerciseKind));
-    publish(TrackerState.calibrating, calReps: 0);
-  }
-
-  @override
-  Future<void> refreshStatus() async {
-    statusController.add(_status);
-  }
-
-  @override
-  Future<void> startCounting({required String exerciseKind}) async {
+  Future<void> startCounting() async {
     startCalls++;
-    publish(TrackerState.running, reps: 0);
-  }
-
-  @override
-  Future<void> pauseCounting() async {
-    publish(TrackerState.paused);
+    await super.startCounting();
   }
 
   @override
   Future<void> resumeCounting() async {
-    startCalls++;
-    publish(TrackerState.running);
+    resumeCalls++;
+    await super.resumeCounting();
+  }
+
+  @override
+  Future<void> reset() async {
+    resetCalls++;
+    await super.reset();
   }
 
   @override
   Future<void> stopCounting() async {
     stopCalls++;
     if (failStop) throw StateError('Device unavailable');
-    publish(profiles.contains(_status?.exerciseId)
-        ? TrackerState.ready
-        : TrackerState.selected);
-  }
-
-  @override
-  Future<void> dispose() async {
-    await controller.close();
-    await statusController.close();
+    await super.stopCounting();
   }
 }
 
@@ -167,8 +84,7 @@ void main() {
       scheduledAt: DateTime(day.year, day.month, day.day, 18),
       exercises: const [curl, pushup]);
 
-  test(
-      'Device is reusable, calibrations are exercise-specific, rep overflow is saved',
+  test('Start learns a new movement; calibration reps and overflow are saved',
       () async {
     final tracker = TestTracker();
     final repo = TestRepository(plan);
@@ -176,12 +92,11 @@ void main() {
     await vm.load();
     await vm.connect(const TrackerDevice(id: 'FT-01', batteryPercent: 100));
     await vm.prepareExercise(curl);
-    await vm.beginCalibration(curl);
-    tracker.completeCalibration();
-    expect(vm.isCalibrated(curl), true);
-    expect(vm.isCalibrated(pushup), false);
-
     await vm.startExercise(plan, curl);
+    expect(vm.isPreparing, isTrue);
+    expect(vm.liveReps, 0);
+    tracker.completeCalibration();
+    expect(vm.liveReps, 3);
     tracker.emitReps(8);
     await Future<void>.delayed(Duration.zero);
     expect(vm.liveReps, 8);
@@ -200,9 +115,8 @@ void main() {
     await vm.load();
     await vm.connect(const TrackerDevice(id: 'FT-01', batteryPercent: 100));
     await vm.prepareExercise(curl);
-    await vm.beginCalibration(curl);
-    tracker.completeCalibration();
     await vm.startExercise(plan, curl);
+    tracker.completeCalibration();
     tracker.emitReps(3);
     await Future<void>.delayed(Duration.zero);
     expect(await vm.finishExercise(), false);
@@ -221,28 +135,28 @@ void main() {
     await vm.load();
     await vm.connect((await tracker.scan()).first);
     await vm.prepareExercise(curl);
-    await vm.beginCalibration(curl);
-    tracker.completeCalibration();
     await vm.startExercise(plan, curl);
+    tracker.completeCalibration();
     return (vm: vm, tracker: tracker, repo: repo);
   }
 
-  test('Starting requires the selected device to confirm real calibration',
+  test('Selection stays local; START begins preparation, not counting',
       () async {
     final tracker = TestTracker();
     final vm =
         WorkoutViewModel(repository: TestRepository(plan), tracker: tracker);
     addTearDown(vm.dispose);
     await vm.load();
+    expect(vm.canStartExercise(curl), isFalse);
     await vm.connect((await tracker.scan()).first);
     await vm.prepareExercise(curl);
-    expect(vm.canStartExercise(curl), isFalse);
-    await expectLater(vm.startExercise(plan, curl), throwsStateError);
-    await vm.beginCalibration(curl);
-    expect(vm.isCalibrated(curl), isFalse);
-    tracker.completeCalibration();
     expect(vm.canStartExercise(curl), isTrue);
     expect(vm.canStartExercise(pushup), isFalse);
+    await vm.startExercise(plan, curl);
+    expect(vm.isPreparing, isTrue);
+    expect(vm.canFinish, isFalse);
+    expect(tracker.startCalls, 1);
+    expect(tracker.resetCalls, 0);
   });
 
   test('Disconnect preserves reps and reconnect pauses until explicit resume',
@@ -250,12 +164,7 @@ void main() {
     final s = await active();
     s.tracker.emitReps(6);
     s.tracker.restoredOnConnect = const TrackerStatus(
-        state: TrackerState.paused,
-        exerciseId: 1,
-        sensorReady: true,
-        profileAvailable: true,
-        repetitions: 7,
-        calibrationReps: 3);
+        state: TrackerState.running, repetitions: 7, calibrationReps: 3);
     s.tracker.emitStatus(null);
     expect(s.vm.isDisconnected, isTrue);
     expect(s.vm.liveReps, 6);
@@ -266,7 +175,8 @@ void main() {
     expect(s.vm.isPaused, isTrue);
     expect(s.tracker.startCalls, 1);
     await s.vm.togglePause();
-    expect(s.tracker.startCalls, 2);
+    expect(s.tracker.startCalls, 1);
+    expect(s.tracker.resumeCalls, 1);
     expect(s.vm.isPaused, isFalse);
   });
 
@@ -320,23 +230,50 @@ void main() {
     expect(s.tracker.startCalls, 1);
   });
 
-  test('Canceling recalibration does not report an old restored profile as new',
+  test('Backgrounding preparation pauses; resume restarts pickup', () async {
+    final s = await active();
+    await s.vm.stopWithoutSaving();
+    await s.vm.prepareExercise(curl);
+    await s.vm.startExercise(plan, curl);
+    s.tracker.publish(TrackerState.calibrating, reps: 0, calReps: 2);
+    await s.vm.pauseForBackground();
+    expect(s.vm.isPaused, isTrue);
+    await s.vm.togglePause();
+    expect(s.vm.trackerStatus!.state, TrackerState.waitPickup);
+    expect(s.vm.liveReps, 0);
+  });
+
+  test('Starting deliberately resets an abandoned or faulted device session',
       () async {
-    final tracker = TestTracker();
-    final vm =
-        WorkoutViewModel(repository: TestRepository(plan), tracker: tracker);
-    addTearDown(vm.dispose);
-    await vm.load();
-    await vm.connect((await tracker.scan()).first);
-    await vm.prepareExercise(curl);
-    await vm.beginCalibration(curl);
-    tracker.completeCalibration();
-    expect(vm.didCompleteCalibration(curl), isTrue);
-    await vm.beginCalibration(curl);
-    // A real peripheral restores its previous durable profile when canceled.
-    tracker.profiles.add(1);
-    await vm.cancelCalibration();
-    expect(vm.isCalibrated(curl), isTrue);
-    expect(vm.didCompleteCalibration(curl), isFalse);
+    final s = await active();
+    await s.vm.stopWithoutSaving();
+    s.tracker.publish(TrackerState.error);
+    await s.vm.prepareExercise(curl);
+    await s.vm.startExercise(plan, curl);
+    expect(s.tracker.resetCalls, 1);
+    expect(s.vm.trackerStatus!.state, TrackerState.waitPickup);
+  });
+
+  test('Sensor error blocks completion; stop resets ERROR', () async {
+    final s = await active();
+    s.tracker.emitReps(8);
+    s.tracker.publish(TrackerState.error);
+    expect(s.vm.canFinish, isFalse);
+    await s.vm.stopWithoutSaving();
+    expect(s.tracker.resetCalls, 1);
+    expect(s.repo.results, isEmpty);
+  });
+
+  test('A lost FINISH reply can be recovered as FINISHED without starting over',
+      () async {
+    final s = await active();
+    s.tracker.emitReps(6);
+    s.tracker.emitStatus(null);
+    s.tracker.restoredOnConnect =
+        const TrackerStatus(state: TrackerState.finished, repetitions: 7);
+    await s.vm.reconnectActiveExercise();
+    expect(s.vm.canFinish, isTrue);
+    expect(await s.vm.finishExercise(), isTrue);
+    expect(s.repo.results.values.single.repetitions, 7);
   });
 }

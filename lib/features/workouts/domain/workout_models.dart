@@ -4,7 +4,6 @@
 // - lib/features/workouts/data/demo_workout_repository.dart
 // - lib/features/workouts/data/workout_repository.dart
 // - lib/features/workouts/domain/workout_policy.dart
-// - lib/features/workouts/presentation/calibration_screen.dart
 // - lib/features/workouts/presentation/exercise_complete_screen.dart
 // - lib/features/workouts/presentation/exercise_setup_screen.dart
 // - lib/features/workouts/presentation/live_exercise_screen.dart

@@ -42,9 +42,9 @@ class WorkoutViewModel extends ChangeNotifier {
   /// A device-confirmed final result survives storage failures for an exact retry.
   ExerciseResult? _pendingResult;
 
-  /// Distinguish a newly learned profile from an old profile restored on cancel.
-  int? _learningExerciseId;
-  int? _completedCalibrationId;
+  // The firmware no longer carries exercise IDs or saved profiles.
+  String? _preparedExerciseId;
+  bool _starting = false;
   int _reps = 0;
   bool _running = false;
   bool _paused = false;
@@ -73,34 +73,35 @@ class WorkoutViewModel extends ChangeNotifier {
   bool get isDisconnected => _disconnected;
   bool get hasActiveSession => _activeExercise != null;
   bool get hasPendingResult => _pendingResult != null;
-  bool get isCalibrating => trackerStatus?.state == TrackerState.calibrating;
+  bool get isPreparing => trackerStatus?.state.isPreparing ?? false;
+  bool get canTogglePause =>
+      !_busy &&
+      hasActiveSession &&
+      !_disconnected &&
+      !_sessionInvalid &&
+      _pendingResult == null &&
+      (trackerStatus!.state.isActive ||
+          trackerStatus!.state == TrackerState.paused);
 
-  /// Saving a frozen result can be retried even if Bluetooth later disconnects.
+  /// A frozen result can be saved again without another BLE command.
   bool get canFinish =>
       !_busy &&
       (_pendingResult != null ||
-          (!_disconnected &&
+          (hasActiveSession &&
+              !_disconnected &&
               !_sessionInvalid &&
               connectedDevice != null &&
-              _running &&
-              _activeExercise != null &&
+              (trackerStatus?.state == TrackerState.running ||
+                  trackerStatus?.state == TrackerState.paused ||
+                  trackerStatus?.state == TrackerState.finished) &&
               policy.targetReached(_activeExercise!, _reps)));
-
-  /// Read the profile flag from the selected device, not a phone-side fake flag.
-  bool isCalibrated(ExercisePlan exercise) =>
-      connectedDevice != null &&
-      trackerStatus?.exerciseId == exerciseIdForKind(exercise.kind) &&
-      trackerStatus?.profileAvailable == true;
-
-  bool didCompleteCalibration(ExercisePlan exercise) =>
-      _completedCalibrationId == exerciseIdForKind(exercise.kind);
 
   bool canStartExercise(ExercisePlan exercise) =>
       !_busy &&
       !hasActiveSession &&
-      isCalibrated(exercise) &&
-      trackerStatus?.sensorReady == true &&
-      trackerStatus?.state == TrackerState.ready;
+      connectedDevice != null &&
+      trackerStatus != null &&
+      _preparedExerciseId == exercise.id;
 
   /// Root startup calls this. Failures remain visible and can be retried.
   Future<void> load() async {
@@ -163,7 +164,7 @@ class WorkoutViewModel extends ChangeNotifier {
         _disconnected = false;
       });
 
-  /// Setup calls SELECT to load this movement's persisted profile on the ESP32.
+  /// Selection stays on the phone. Setup reads the device without changing it.
   Future<void> prepareExercise(ExercisePlan exercise) => _perform(() async {
         if (hasActiveSession) {
           throw StateError('An exercise is already active.');
@@ -171,44 +172,9 @@ class WorkoutViewModel extends ChangeNotifier {
         if (connectedDevice == null) {
           throw StateError('Connect your tracker first.');
         }
-        // A previous app process may have left a paused session on the peripheral.
-        // This is a new setup flow, so deliberately end that session before SELECT.
-        final state = trackerStatus?.state;
-        if (state == TrackerState.paused ||
-            state == TrackerState.running ||
-            state == TrackerState.calibrating ||
-            state == TrackerState.error) {
-          await _tracker.stopCounting();
-        }
-        await _tracker.selectExercise(exerciseKind: exercise.kind);
-      });
-
-  Future<void> beginCalibration(ExercisePlan exercise) => _perform(() async {
-        if (hasActiveSession) {
-          throw StateError('Stop the current exercise before calibrating.');
-        }
-        if (trackerStatus?.exerciseId != exerciseIdForKind(exercise.kind)) {
-          await _tracker.selectExercise(exerciseKind: exercise.kind);
-        }
-        _learningExerciseId = exerciseIdForKind(exercise.kind);
-        _completedCalibrationId = null;
-        try {
-          await _tracker.beginCalibration(exerciseKind: exercise.kind);
-        } catch (_) {
-          _learningExerciseId = null;
-          rethrow;
-        }
-      });
-
-  /// FINISH cancels calibration too. Offline cancellation only closes the phone UI;
-  /// the firmware independently cancels learning when the BLE link is lost.
-  Future<void> cancelCalibration() => _perform(() async {
-        _learningExerciseId = null;
-        _completedCalibrationId = null;
-        if (hasActiveSession) {
-          throw StateError('Cannot cancel calibration during an exercise.');
-        }
-        if (connectedDevice != null) await _tracker.stopCounting();
+        _preparedExerciseId = null;
+        await _tracker.refreshStatus();
+        _preparedExerciseId = exercise.id;
       });
 
   Future<void> refreshTrackerStatus() =>
@@ -216,8 +182,7 @@ class WorkoutViewModel extends ChangeNotifier {
 
   Future<void> startExercise(WorkoutPlan workout, ExercisePlan exercise) async {
     if (!canStartExercise(exercise)) {
-      throw StateError(
-          'Connect the tracker and complete calibration before starting.');
+      throw StateError('Connect your tracker before starting.');
     }
     await _perform(() async {
       if (status(workout) != WorkoutAvailability.ready ||
@@ -232,29 +197,40 @@ class WorkoutViewModel extends ChangeNotifier {
       _pendingResult = null;
       _sessionInvalid = false;
       _disconnected = false;
+      _starting = true;
       try {
-        await _tracker.startCounting(exerciseKind: exercise.kind);
+        // Starting a new exercise deliberately discards any abandoned session.
+        // RESET also recovers ERROR; FINISH is invalid in that state.
+        if (trackerStatus?.state != TrackerState.idle &&
+            trackerStatus?.state != TrackerState.finished) {
+          await _tracker.reset();
+        }
+        await _tracker.startCounting();
         _running = true;
-        _paused = false;
+        _onStatus(trackerStatus);
       } catch (_) {
-        // A timeout does not prove START was rejected. End or disconnect before
-        // dropping the local session, so a retry cannot count an unknown session.
+        // A failed START may have reached the tracker. Attempt to reset it;
+        // if offline the UI must warn that the device may still be running.
         try {
-          if (connectedDevice != null) await _tracker.stopCounting();
+          if (connectedDevice != null) await _tracker.reset();
         } catch (_) {
           await _tracker.disconnect();
         }
         _clearSession();
         rethrow;
+      } finally {
+        _starting = false;
       }
     });
   }
 
   Future<void> togglePause() => _perform(() async {
-        if (!_running ||
+        if (!hasActiveSession ||
             _disconnected ||
             _sessionInvalid ||
-            _pendingResult != null) {
+            _pendingResult != null ||
+            !(trackerStatus!.state.isActive ||
+                trackerStatus!.state == TrackerState.paused)) {
           throw StateError(
               'Reconnect the active exercise before changing counting.');
         }
@@ -267,7 +243,9 @@ class WorkoutViewModel extends ChangeNotifier {
         _onStatus(trackerStatus);
       });
 
-  /// Reconnect never SELECTs (which resets reps) and never resumes automatically.
+  /// The firmware continues offline. Reconnect to the same peripheral, check
+  /// state/count, then explicitly pause. No exercise/session ID exists on the wire;
+  /// this cannot prove ownership if another phone has replaced the session.
   Future<void> reconnectActiveExercise() => _perform(() async {
         final device = _sessionDevice;
         final exercise = _activeExercise;
@@ -280,31 +258,36 @@ class WorkoutViewModel extends ChangeNotifier {
           await _tracker.refreshStatus();
           final restored = trackerStatus;
           if (restored == null ||
-              restored.exerciseId != exerciseIdForKind(exercise.kind) ||
               restored.repetitions < _reps ||
               (restored.state != TrackerState.paused &&
-                  restored.state != TrackerState.running)) {
+                  !restored.state.isActive &&
+                  restored.state != TrackerState.finished)) {
             _sessionInvalid = true;
             throw StateError(
                 'The tracker session has reset. Stop this exercise and start it again.');
           }
-          if (restored.state == TrackerState.running) {
+          if (restored.state.isActive) {
             await _tracker.pauseCounting();
           }
           _reps = trackerStatus!.repetitions;
           _disconnected = false;
           _sessionInvalid = false;
-          _running = true;
-          _paused = true;
+          _running = trackerStatus!.state != TrackerState.finished;
+          _paused = trackerStatus!.state == TrackerState.paused;
         } finally {
           _recovering = false;
         }
       });
 
-  /// Stop is also allowed offline: the device pauses itself on disconnection.
+  /// Offline stop only discards the phone session. The sensor may continue;
+  /// a later new exercise resets that abandoned session before START.
   Future<void> stopWithoutSaving() => _perform(() async {
         if (connectedDevice != null && _pendingResult == null) {
-          await _tracker.stopCounting();
+          if (trackerStatus?.state == TrackerState.error) {
+            await _tracker.reset();
+          } else {
+            await _tracker.stopCounting();
+          }
         }
         _clearSession();
       });
@@ -320,8 +303,7 @@ class WorkoutViewModel extends ChangeNotifier {
         await _tracker.stopCounting();
         final finalStatus = trackerStatus;
         if (finalStatus == null ||
-            finalStatus.exerciseId != exerciseIdForKind(exercise.kind) ||
-            finalStatus.state != TrackerState.ready ||
+            finalStatus.state != TrackerState.finished ||
             finalStatus.repetitions < _reps) {
           throw StateError(
               'Unable to verify the final repetition count. Refresh or reconnect your tracker.');
@@ -346,13 +328,14 @@ class WorkoutViewModel extends ChangeNotifier {
   }
 
   /// Android/iOS backgrounding pauses counting after any in-flight command ends.
-  /// Returning to the app requires an explicit Resume; calibration is canceled.
+  /// Returning requires an explicit RESUME. Firmware restarts preparation if
+  /// paused before template lock; a learned template survives a pause.
   Future<void> pauseForBackground() async {
     await _operationDone?.future;
     if (_disposed || connectedDevice == null) return;
-    if (isCalibrating) {
-      await cancelCalibration();
-    } else if (_running && !_paused && _pendingResult == null) {
+    if (hasActiveSession &&
+        trackerStatus!.state.isActive &&
+        _pendingResult == null) {
       await togglePause();
     }
   }
@@ -360,7 +343,13 @@ class WorkoutViewModel extends ChangeNotifier {
   /// The root invokes this on sign-out, including if a workout route is open.
   Future<void> endSession() => _perform(() async {
         try {
-          if (connectedDevice != null) await _tracker.stopCounting();
+          if (connectedDevice != null) {
+            if (trackerStatus?.state == TrackerState.error) {
+              await _tracker.reset();
+            } else {
+              await _tracker.stopCounting();
+            }
+          }
         } finally {
           await _tracker.disconnect();
           _clearSession();
@@ -380,46 +369,33 @@ class WorkoutViewModel extends ChangeNotifier {
     _notify();
   }
 
-  /// Status notifications include calibration progress, errors, and pause state.
+  /// Status drives preparation, pause, error and final-count UI.
   void _onStatus(TrackerStatus? status) {
     if (_disposed || _recovering) return;
-    if (_learningExerciseId != null &&
-        status != null &&
-        status.exerciseId == _learningExerciseId &&
-        status.state == TrackerState.ready &&
-        status.profileAvailable &&
-        status.result == 0) {
-      _completedCalibrationId = _learningExerciseId;
-      _learningExerciseId = null;
-    }
-    _deviceError = status != null && status.result != 0
-        ? FitnessProtocol.resultMessage(status.result)
+    _deviceError = status?.event == TrackerEvent.commandRejected
+        ? FitnessProtocol.resultMessage(status!.detail)
         : null;
     if (status == null) {
-      _learningExerciseId = null;
-      _completedCalibrationId = null;
+      _preparedExerciseId = null;
       _disconnected = hasActiveSession;
       if (hasActiveSession && _pendingResult == null) {
-        _paused = true;
-        _trackerError =
-            'Tracker disconnected. Reconnect to continue, or stop without completing.';
+        _trackerError = 'Tracker disconnected. It may still be counting. '
+            'Reconnect to check it, or discard this exercise without saving.';
       }
     } else if (hasActiveSession && !_disconnected && _pendingResult == null) {
-      if (status.exerciseId != exerciseIdForKind(_activeExercise!.kind)) {
+      if (!_starting &&
+          (status.state == TrackerState.idle || status.repetitions < _reps)) {
         _sessionInvalid = true;
         _trackerError =
-            'The tracker changed exercises. Stop this exercise and start again.';
-      } else {
-        _reps = math.max(_reps, status.repetitions);
-        _paused = status.state != TrackerState.running;
-        if (status.state == TrackerState.running ||
-            status.state == TrackerState.paused) {
-          _running = true;
-        }
-        if (status.state == TrackerState.error || !status.sensorReady) {
-          _deviceError =
-              'Tracker sensor is not ready. Check its connection and position, then refresh or restart.';
-        }
+            'The tracker session has reset. Stop this exercise and start again.';
+      }
+      _reps = math.max(_reps, status.repetitions);
+      _paused = status.state == TrackerState.paused;
+      _running = status.state.isActive || _paused;
+      if (status.state == TrackerState.error) {
+        _deviceError =
+            'The tracker reported an error. Stop this session and check '
+            'the sensor before starting again.';
       }
     }
     _notify();

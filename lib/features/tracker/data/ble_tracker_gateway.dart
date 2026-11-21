@@ -73,7 +73,7 @@ class BleTrackerGateway implements TrackerGateway {
               FitnessProtocol.decodeStatus(await _transport.readStatus());
           _checkGeneration(generation);
           _accept(initial);
-          await _send(TrackerCommand.getStatus, 0);
+          await _send(TrackerCommand.getStatus);
         } catch (error) {
           await disconnect();
           if (error is FormatException) {
@@ -94,60 +94,40 @@ class BleTrackerGateway implements TrackerGateway {
   }
 
   @override
-  Future<void> selectExercise({required String exerciseKind}) =>
-      _action(() async {
-        await _send(TrackerCommand.select, exerciseIdForKind(exerciseKind));
-      });
-
-  @override
-  Future<void> beginCalibration({required String exerciseKind}) =>
-      _action(() async {
-        final exerciseId = exerciseIdForKind(exerciseKind);
-        if (_status?.exerciseId != exerciseId) {
-          throw const TrackerException(
-              'Select this exercise on the tracker before calibrating.');
-        }
-        await _send(TrackerCommand.calibrate, exerciseId);
-      });
-
-  @override
   Future<void> refreshStatus() => _action(() async {
-        await _send(TrackerCommand.getStatus, 0);
+        await _send(TrackerCommand.getStatus);
       });
 
   @override
-  Future<void> startCounting({required String exerciseKind}) =>
-      _action(() async {
-        final exerciseId = exerciseIdForKind(exerciseKind);
-        if (_status?.exerciseId != exerciseId) {
-          throw const TrackerException(
-              'Select this exercise on the tracker before starting.');
-        }
-        await _send(TrackerCommand.start, exerciseId);
+  Future<void> startCounting() => _action(() async {
+        await _send(TrackerCommand.start);
       });
 
   @override
   Future<void> pauseCounting() => _action(() async {
-        await _send(TrackerCommand.pause, _selectedExercise());
+        await _send(TrackerCommand.pause);
       });
 
   @override
   Future<void> resumeCounting() => _action(() async {
-        // START from PAUSED resumes without resetting the firmware count.
-        await _send(TrackerCommand.start, _selectedExercise());
+        await _send(TrackerCommand.resume);
+      });
+
+  @override
+  Future<void> reset() => _action(() async {
+        await _send(TrackerCommand.reset);
       });
 
   @override
   Future<void> stopCounting() => _action(() async {
-        if (_status?.exerciseId == 0) return;
-        await _send(TrackerCommand.finish, _selectedExercise());
+        // FINISH is not idempotent in this firmware. Query before retrying it.
+        await _send(TrackerCommand.getStatus);
+        if (_status!.state == TrackerState.finished ||
+            _status!.state == TrackerState.idle) {
+          return;
+        }
+        await _send(TrackerCommand.finish);
       });
-
-  int _selectedExercise() {
-    final id = _status?.exerciseId ?? 0;
-    if (id == 0) throw const TrackerException('Select an exercise first.');
-    return id;
-  }
 
   void _checkGeneration(int generation) {
     if (_device == null || generation != _generation) {
@@ -156,10 +136,10 @@ class BleTrackerGateway implements TrackerGateway {
     }
   }
 
-  Future<TrackerStatus> _send(TrackerCommand command, int exerciseId) async {
+  Future<TrackerStatus> _send(TrackerCommand command) async {
     _checkGeneration(_generation);
     _requestId = (_requestId % 65535) + 1;
-    final pending = _PendingCommand(_requestId, exerciseId, command);
+    final pending = _PendingCommand(_requestId, command);
     _pending = pending;
     // Attach an error listener now, including when a disconnect occurs during write().
     final response = pending.completer.future;
@@ -167,14 +147,11 @@ class BleTrackerGateway implements TrackerGateway {
         response.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
     try {
       await _transport
-          .writeControl(
-              FitnessProtocol.command(command, pending.requestId, exerciseId))
+          .writeControl(FitnessProtocol.command(command, pending.requestId))
           .timeout(commandTimeout);
       final status = await response.timeout(commandTimeout);
-      // GET_STATUS reports the existing sensor/storage fault, not a rejected query.
-      // Keep the connection available so setup can show and recover that fault.
-      if (status.result != 0 && command != TrackerCommand.getStatus) {
-        throw TrackerException(FitnessProtocol.resultMessage(status.result));
+      if (status.event == TrackerEvent.commandRejected) {
+        throw TrackerException(FitnessProtocol.resultMessage(status.detail));
       }
       if (!_expectedState(command, status.state)) {
         throw const TrackerException(
@@ -182,11 +159,15 @@ class BleTrackerGateway implements TrackerGateway {
       }
       return status;
     } on TimeoutException {
-      // The action may have reached the device. Disconnect makes firmware pause,
-      // instead of silently retrying START and risking an unknown workout state.
+      // A timeout leaves the command outcome unknown. This firmware continues
+      // running after disconnect, so the UI must not claim the device stopped.
       await disconnect();
-      throw const TrackerException(
-          'The tracker did not confirm the action. Reconnect and try again.');
+      throw TrackerException(pending.sawWrongAck
+          ? 'The firmware replied with the command number instead of the request ID. '
+              'Correct the firmware acknowledgement before continuing. '
+              'The tracker may still be running.'
+          : 'The tracker did not confirm the action. It may still be running. '
+              'Reconnect to check its state.');
     } catch (error) {
       if (!pending.completer.isCompleted) {
         // A failed write has an uncertain outcome; reset this BLE session.
@@ -200,14 +181,11 @@ class BleTrackerGateway implements TrackerGateway {
 
   bool _expectedState(TrackerCommand command, TrackerState state) =>
       switch (command) {
-        TrackerCommand.select =>
-          state == TrackerState.selected || state == TrackerState.ready,
-        TrackerCommand.calibrate => state == TrackerState.calibrating,
-        TrackerCommand.start => state == TrackerState.running,
+        TrackerCommand.start => state == TrackerState.waitPickup,
         TrackerCommand.pause => state == TrackerState.paused,
-        TrackerCommand.finish => state == TrackerState.ready ||
-            state == TrackerState.selected ||
-            state == TrackerState.idle,
+        TrackerCommand.resume => state.isActive,
+        TrackerCommand.reset => state == TrackerState.idle,
+        TrackerCommand.finish => state == TrackerState.finished,
         TrackerCommand.getStatus => true,
       };
 
@@ -218,9 +196,16 @@ class BleTrackerGateway implements TrackerGateway {
       final pending = _pending;
       final matches = pending != null &&
           next.requestId == pending.requestId &&
-          (pending.command == TrackerCommand.getStatus ||
-              next.exerciseId == pending.exerciseId ||
-              next.result != 0);
+          (next.event == TrackerEvent.commandRejected ||
+              (pending.command == TrackerCommand.getStatus
+                  ? next.event == TrackerEvent.none
+                  : next.event == TrackerEvent.commandOk));
+      if (pending != null &&
+          next.event == TrackerEvent.commandOk &&
+          next.requestId == pending.command.code &&
+          !matches) {
+        pending.sawWrongAck = true;
+      }
       // Old ACKs (including read echoes) cannot change a newer command's state.
       if (next.requestId != 0 && !matches) return;
       _accept(next);
@@ -233,14 +218,22 @@ class BleTrackerGateway implements TrackerGateway {
   }
 
   void _accept(TrackerStatus next) {
-    _status = next;
-    _lastReps = next.repetitions;
-    _statuses.add(next);
-    // Calibration progress is separate from workout reps. FINISH still publishes
-    // the authoritative final total, even though its state has become READY.
-    if (next.state != TrackerState.calibrating) {
-      _repetitions.add(next.repetitions);
+    var progress = _status?.calibrationReps ?? 0;
+    if (next.state == TrackerState.idle ||
+        next.state == TrackerState.waitPickup ||
+        next.state == TrackerState.settling ||
+        next.event == TrackerEvent.calibrationReset) {
+      progress = 0;
+    } else if (next.event == TrackerEvent.calibrationRep) {
+      progress = next.detail;
+    } else if (next.state == TrackerState.running ||
+        next.event == TrackerEvent.templateLocked) {
+      progress = TrackerStatus.calibrationTarget;
     }
+    _status = next.copyWith(calibrationReps: progress);
+    _lastReps = next.repetitions;
+    _statuses.add(_status);
+    _repetitions.add(next.repetitions);
   }
 
   void _onRepPacket(List<int> bytes) {
@@ -249,13 +242,15 @@ class BleTrackerGateway implements TrackerGateway {
       final event = FitnessProtocol.decodeRepetition(bytes);
       final current = _status;
       if (current == null ||
-          event.exerciseId != current.exerciseId ||
           (current.state != TrackerState.running &&
               current.state != TrackerState.paused) ||
           event.repetitions < _lastReps) {
         return;
       }
       _lastReps = event.repetitions;
+      // Heartbeat telemetry can recover a lost rep notification. Keep the
+      // snapshot current too, so later pause/finish checks see the same total.
+      _status = current.copyWith(repetitions: event.repetitions);
       _repetitions.add(event.repetitions);
     } on FormatException {
       _protocolFailure();
@@ -306,9 +301,9 @@ class BleTrackerGateway implements TrackerGateway {
 }
 
 class _PendingCommand {
-  _PendingCommand(this.requestId, this.exerciseId, this.command);
+  _PendingCommand(this.requestId, this.command);
   final int requestId;
-  final int exerciseId;
   final TrackerCommand command;
+  bool sawWrongAck = false;
   final completer = Completer<TrackerStatus>();
 }

@@ -9,7 +9,6 @@
 // - lib/features/profile/presentation/profile_screen.dart
 // - lib/features/progress/presentation/progress_screen.dart
 // - lib/features/shell/presentation/main_shell.dart
-// - lib/features/workouts/presentation/calibration_screen.dart
 // - lib/features/workouts/presentation/exercise_complete_screen.dart
 // - lib/features/workouts/presentation/exercise_setup_screen.dart
 // - lib/features/workouts/presentation/live_exercise_screen.dart
@@ -80,10 +79,28 @@ ThemeData fitTheme(Brightness brightness) {
     onSurface: foreground,
   );
 
+  // Larger reading sizes keep workout prompts legible at arm's length.
+  final textTheme = ThemeData(brightness: brightness)
+      .textTheme
+      .copyWith(
+        headlineMedium:
+            const TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
+        headlineSmall:
+            const TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
+        titleLarge: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+        titleMedium: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+        bodyLarge: const TextStyle(fontSize: 18, height: 1.45),
+        bodyMedium: const TextStyle(fontSize: 16, height: 1.4),
+        bodySmall: const TextStyle(fontSize: 14, height: 1.4),
+        labelLarge: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+      )
+      .apply(bodyColor: foreground, displayColor: foreground);
+
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
+    textTheme: textTheme,
     scaffoldBackgroundColor: background,
     appBarTheme: AppBarTheme(
       backgroundColor: background,
@@ -91,6 +108,8 @@ ThemeData fitTheme(Brightness brightness) {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
+      titleTextStyle: TextStyle(
+          color: foreground, fontSize: 22, fontWeight: FontWeight.w700),
     ),
     cardTheme: CardThemeData(
       color: surface,
@@ -103,23 +122,29 @@ ThemeData fitTheme(Brightness brightness) {
       indicatorColor: dark ? const Color(0xFF294A3B) : FitColors.softGreen,
       height: 78,
       labelTextStyle: WidgetStateProperty.all(
-        const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+        const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: FitColors.lime,
         foregroundColor: FitColors.ink,
-        minimumSize: const Size.fromHeight(52),
+        minimumSize: const Size.fromHeight(56),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(50),
+        minimumSize: const Size.fromHeight(54),
+        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+          textStyle:
+              const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
     ),
   );
 }
