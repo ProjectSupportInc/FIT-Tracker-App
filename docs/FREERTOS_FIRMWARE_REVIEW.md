@@ -1,15 +1,40 @@
 # FreeRTOS firmware integration review
 
-Reviewed the working tree at `/home/kavindu/fitness-tracker/fit-tracker`, branch
-`feature/port-to-freeRTOS`, on 2026-11-21, including the user's uncommitted changes.
-The initial review was read-only. After explicit approval, only three corrections
-were applied: echo request IDs, accept RESUME, and send CAL_REP for calibration
-rep 2. Formatting configuration, comments, struct/enum names and all other firmware
-files remain unchanged. Nothing was flashed.
+## Current resolution
 
-Findings 1, 2 and 5 below describe the original defects and are now fixed. Findings
-3 and 4 remain unresolved. Mobile tests model the intended replies and also reject
-broken replies from older firmware builds.
+All five original findings are addressed in the current firmware working tree.
+The original basic integration pair is preserved under the shared tag
+`tested-integration-2026-11-21` (firmware `6eabe43`, mobile `6c3ca04`). After that
+checkpoint, the user authorized applying the deferred proposal and recovery work.
+
+- Findings 1, 2 and 5 were fixed before the checkpoint: request-ID replies,
+  RESUME decoding and the calibration-rep-2 event.
+- Finding 3 is fixed by draining producer/consumer samples before PAUSE/FINISH
+  completes. The consumer supplies the final count and detector phase, including
+  a template lock that races a pause.
+- Finding 4 is fixed by one pending operation, ordered worker command queues,
+  completion reports, BUSY rejection and coordinated RESET on failure. A worker
+  that never confirms stopping leaves a latched ERROR requiring reboot.
+- Internal generations reject stale worker reports. The version-2 wire contract
+  adds boot/session identity, snapshot revision and explicit calibration progress.
+- Contact timeouts pause unattended sessions; worker progress checks and a
+  platform watchdog cover stalls. Invalid/zero gravity is rejected before projection.
+- NVS/time/random/watchdog SDK calls are behind platform adapters. Application
+  initialization retains `app_result_t`; existing type names and `.clang-format`
+  are preserved. Platform BLE files were not changed.
+
+The original proposal remains archived unchanged in the app's ignored
+`local-reviews/` directory. Firmware tests now live in its `tests/` directory:
+23 protocol/coordination/recovery checks plus a real-detector inactivity test,
+compiled with address/undefined-behavior sanitizers. ESP-IDF compilation succeeds.
+These checks do not replace physical scheduler/radio/sensor trials; nothing was
+flashed. See [current integration behavior](BLE_WORKOUT_SETUP.md).
+
+## Original review record
+
+The findings below describe the original FreeRTOS implementation and the initial,
+limited corrections. File line numbers and version-1 packet examples are historical.
+The verification sections at the end record what was tested at that earlier stage.
 
 ## 1. Fixed: successful command replies use the wrong request ID
 
@@ -40,7 +65,7 @@ command-manager or worker handlers can run. The phone cannot resume a paused set
 Applied correction: add `case FT_CMD_RESUME:` alongside START/PAUSE in the switch.
 Do not map resume to START; START is invalid in PAUSED and starts a new session.
 
-## 3. High: command/worker event ordering can lose the final rep or a template lock
+## 3. Resolved after checkpoint: command/worker event ordering can lose the final rep or a template lock
 
 `main/app/app_tasks/command_manager/command_manager.c:311,416`
 
@@ -63,7 +88,7 @@ state across a concurrent pause. Tag worker events with a session generation so
 RESET/START can reject old events. Merely swapping command/event processing order
 reduces one race but cannot handle events still in flight on another task/core.
 
-## 4. High: partial command dispatch can leave workers doing different operations
+## 4. Resolved after checkpoint: partial command dispatch can leave workers doing different operations
 
 `main/app/app_tasks/command_manager/command_manager.c:170–213`
 
@@ -97,7 +122,7 @@ send_status(FT_EVENT_CAL_REP, 2, 0);
 The app follows the event definition rather than silently treating a reset as a
 successful rep. A subsequent TEMPLATE_LOCKED still establishes the initial total 3.
 
-## Other findings and behavior to decide
+## Other findings at the time of the original review
 
 - **No disconnect policy:** `ble_disconnect_generation()` is never consumed by the
   application tasks. Counting continues while disconnected. This is not inherently

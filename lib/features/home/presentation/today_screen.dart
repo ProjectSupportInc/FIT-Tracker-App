@@ -139,7 +139,8 @@ class _TodayScreenState extends State<TodayScreen> {
                 WorkoutCard(
                   workout: w,
                   vm: vm,
-                  onTap: vm.status(w) == WorkoutAvailability.ready
+                  onTap: (vm.status(w) == WorkoutAvailability.ready ||
+                          vm.status(w) == WorkoutAvailability.completed)
                       ? () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
                               builder: (_) => WorkoutDetailScreen(workout: w)))

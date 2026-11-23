@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../tracker/domain/tracker_status.dart';
+import 'exercise_illustration.dart';
 
 /// Visual feedback for the current device state. Animation never advances a
 /// stage, fills a calibration checkpoint, or changes the reported rep count.
@@ -15,6 +16,8 @@ class WorkoutStageView extends StatefulWidget {
     this.disconnected = false,
     this.readyToSave = false,
     this.animate = true,
+    this.exerciseKind = "curl",
+    this.interrupted = false,
   });
 
   final TrackerStatus? status;
@@ -23,6 +26,8 @@ class WorkoutStageView extends StatefulWidget {
   final bool disconnected;
   final bool readyToSave;
   final bool animate;
+  final String exerciseKind;
+  final bool interrupted;
 
   @override
   State<WorkoutStageView> createState() => _WorkoutStageViewState();
@@ -48,6 +53,7 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
   _Phase? _animatedPhase;
 
   _Phase get _phase {
+    if (widget.interrupted) return _Phase.error;
     if (widget.readyToSave) return _Phase.finished;
     if (widget.disconnected) return _Phase.disconnected;
     return switch (widget.status?.state) {
@@ -126,27 +132,38 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
     final targetReached = widget.repetitions >= widget.target;
     final justLearned = phase == _Phase.counting && widget.repetitions == 3;
     final title = switch (phase) {
-      _Phase.pickup => 'Lift into position',
-      _Phase.hold => 'Hold still',
+      _Phase.pickup => 'Take your starting position',
+      _Phase.hold => 'Hold this position',
       _Phase.calibration =>
-        learned == 3 ? 'Three reps learned' : 'Find your rhythm',
+        learned == 0 ? 'Begin three controlled reps' : 'Rep $learned recorded',
       _Phase.counting => targetReached
           ? 'Target reached'
           : justLearned
-              ? 'Movement learned'
+              ? 'Ready. Keep going.'
               : 'Keep it going',
       _Phase.paused => 'Workout paused',
       _Phase.disconnected => 'Connection lost',
-      _Phase.error => 'Check your tracker',
+      _Phase.error =>
+        widget.interrupted ? 'Session interrupted' : 'Check your tracker',
       _Phase.finished => targetReached ? 'Set complete' : 'Session ended',
       _Phase.waiting => 'Waiting for your tracker',
     };
     final instruction = switch (phase) {
-      _Phase.pickup => 'Move the equipment into position to begin.',
-      _Phase.hold => 'Stay steady. We’ll let you know when to move.',
+      _Phase.pickup => widget.exerciseKind.contains('push')
+          ? 'Get into your push-up position.'
+          : widget.exerciseKind.contains('squat')
+              ? 'Stand ready for your first squat.'
+              : 'Take the weight or handles and get ready.',
+      _Phase.hold => widget.exerciseKind.contains('push')
+          ? 'Keep your body still until the start cue.'
+          : 'Keep the weight steady until the start cue.',
       _Phase.calibration => learned == 3
-          ? 'Your tracker is getting ready to count.'
-          : 'Do ${3 - learned} ${learned == 2 ? 'more steady rep' : learned == 1 ? 'more steady reps' : 'steady reps'}. Rest briefly between each.',
+          ? 'Calibration complete. Your first three reps count.'
+          : learned == 0
+              ? 'Return to the start and pause briefly after each rep.'
+              : learned == 1
+                  ? 'Repeat the same movement.'
+                  : 'Repeat once more.',
       _Phase.counting => targetReached
           ? 'Finish when you’re ready, or keep going.'
           : justLearned
@@ -154,7 +171,9 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
               : '${widget.target - widget.repetitions} more to your goal.',
       _Phase.paused => 'Take a breath. Resume when you’re ready.',
       _Phase.disconnected => 'Showing your last confirmed count.',
-      _Phase.error => 'Stop this session and check the sensor.',
+      _Phase.error => widget.interrupted
+          ? 'Your last confirmed reps are available to keep.'
+          : 'Rest the equipment and check the tracker.',
       _Phase.finished => widget.readyToSave
           ? 'Save your result to finish.'
           : 'Your tracker has stopped counting.',
@@ -166,7 +185,7 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
     final duration =
         _reduceMotion ? Duration.zero : const Duration(milliseconds: 300);
     final announcement = preparing
-        ? '$title. $instruction${phase == _Phase.calibration ? ' $learned of 3 calibration reps learned.' : ''}'
+        ? '$title. $instruction${phase == _Phase.calibration ? ' $learned of 3 calibration reps recorded.' : ''}'
         : '$title. ${widget.repetitions} repetitions, goal ${widget.target}. $instruction';
 
     return Semantics(
@@ -199,7 +218,7 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
             const SizedBox(height: 24),
             _calibrationCheckpoints(learned, duration),
             const SizedBox(height: 12),
-            Text('$learned of 3 reps learned',
+            Text('$learned of 3 reps recorded',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.titleMedium),
           ],
@@ -249,12 +268,10 @@ class _WorkoutStageViewState extends State<WorkoutStageView>
               Transform.translate(
                 key: const ValueKey('movement-cue'),
                 offset: Offset(0, hold ? 0 : -8 - wave * 18),
-                child: Icon(
-                    hold
-                        ? Icons.pan_tool_outlined
-                        : Icons.fitness_center_rounded,
-                    size: hold ? 78 : 90,
-                    color: color),
+                child: hold
+                    ? Icon(Icons.pan_tool_outlined, size: 78, color: color)
+                    : ExerciseIllustration(
+                        kind: widget.exerciseKind, motion: wave, color: color),
               ),
               if (!hold)
                 Positioned(

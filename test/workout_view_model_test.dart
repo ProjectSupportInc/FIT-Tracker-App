@@ -23,9 +23,9 @@ class TestTracker extends MockTrackerGateway {
   }
 
   @override
-  Future<void> startCounting() async {
+  Future<void> startCounting({int? sessionId}) async {
     startCalls++;
-    await super.startCounting();
+    await super.startCounting(sessionId: sessionId);
   }
 
   @override
@@ -48,7 +48,7 @@ class TestTracker extends MockTrackerGateway {
   }
 }
 
-class TestRepository implements WorkoutRepository {
+class TestRepository extends WorkoutRepository {
   TestRepository(this.plan);
   final WorkoutPlan plan;
   final results = <String, ExerciseResult>{};
@@ -163,8 +163,12 @@ void main() {
       () async {
     final s = await active();
     s.tracker.emitReps(6);
-    s.tracker.restoredOnConnect = const TrackerStatus(
-        state: TrackerState.running, repetitions: 7, calibrationReps: 3);
+    s.tracker.restoredOnConnect = TrackerStatus(
+        bootId: s.tracker.bootId,
+        sessionId: s.tracker.sessionId,
+        state: TrackerState.running,
+        repetitions: 7,
+        calibrationReps: 3);
     s.tracker.emitStatus(null);
     expect(s.vm.isDisconnected, isTrue);
     expect(s.vm.liveReps, 6);
@@ -269,8 +273,11 @@ void main() {
     final s = await active();
     s.tracker.emitReps(6);
     s.tracker.emitStatus(null);
-    s.tracker.restoredOnConnect =
-        const TrackerStatus(state: TrackerState.finished, repetitions: 7);
+    s.tracker.restoredOnConnect = TrackerStatus(
+        state: TrackerState.finished,
+        repetitions: 7,
+        bootId: s.tracker.bootId,
+        sessionId: s.tracker.sessionId);
     await s.vm.reconnectActiveExercise();
     expect(s.vm.canFinish, isTrue);
     expect(await s.vm.finishExercise(), isTrue);

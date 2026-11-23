@@ -8,7 +8,7 @@ import 'workout_repository.dart';
 
 /// In-memory sample data. Replace with an authenticated backend repository.
 /// In-memory storage selected in FitTrackerApp; changes disappear when the app restarts.
-class DemoWorkoutRepository implements WorkoutRepository {
+class DemoWorkoutRepository extends WorkoutRepository {
   /// An injectable date keeps local schedules and tests deterministic.
   DemoWorkoutRepository({DateTime? today}) : _today = today ?? DateTime.now();
   final DateTime _today;

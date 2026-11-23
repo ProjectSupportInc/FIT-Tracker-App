@@ -1,144 +1,178 @@
 # FreeRTOS BLE workout flow
 
-The app targets the firmware working tree on `feature/port-to-freeRTOS` in
-`/home/kavindu/fitness-tracker/fit-tracker`. Mobile changes are on
+The firmware is in `/home/kavindu/fitness-tracker/fit-tracker`, branch
+`feature/port-to-freeRTOS`. The app branch is
 `feature/implement-use-cases-with-new-esp32-firmware`.
 
-**Three approved firmware corrections are applied:** command request IDs, RESUME
-decoding, and the calibration-rep-2 event. No firmware was flashed. The original
-firmware remains in use by choice; task-coordination changes are deferred. See the
-[firmware review and proposed fixes](FREERTOS_FIRMWARE_REVIEW.md) for the remaining
-issues. The unapplied proposal is backed up locally in
-`local-reviews/freertos-task-coordination-proposal.tar.gz` (ignored by Git).
+Both repositories preserve the previous working pair under tag
+`tested-integration-2026-11-21`: **firmware `6eabe43`, mobile `6c3ca04`**.
+The user reported basic integration working on that pair; it was not thoroughly
+hardware-tested. The changes after those checkpoints use **protocol version 2**.
+**Install the new app and firmware together.** Old packet formats are rejected.
 
-Normal launches use `BleTrackerGateway`, `FlutterBleTransport`, and
-`LocalWorkoutRepository`. No timer generates reps. Test doubles are explicitly
-injected. Sign-in is still a demo identity and prescriptions are a local schedule.
+The previously deferred worker-coordination proposal is now applied, with its
+host tests. The original archive is retained unchanged in the app's ignored
+`local-reviews/freertos-task-coordination-proposal.tar.gz`.
+
+Normal launches use real BLE and `LocalWorkoutRepository`. No timer creates reps.
+Authentication and prescribed workouts remain demo/local features; results are
+stored locally and are not separated by signed-in account or synced to a server.
 
 ## Using the app
 
-1. Use the current FreeRTOS firmware; the deferred proposal is not required by
-   these UI changes.
-   Check its own board configuration for I2C pins and BNO055 address; this app does
-   not configure wiring. Firmware initialization currently stops before BLE if
-   the sensor cannot initialize, so check the serial log if no device advertises.
-2. Run `flutter pub get` and `flutter run` in this repository on an Android phone.
-   This repository has Android platform configuration, but no iOS project.
-3. Select an available workout and exercise. Scanning starts automatically unless
-   a tracker is already connected. Grant Bluetooth/Nearby devices access and
-   select **FitnessTracker**. The screen advances to the ready view after
-   connection. On older Android versions, scanning also
-   needs location permission and enabled Location services. Actual device IDs
-   distinguish trackers; the firmware has no battery characteristic.
-4. Press **Start Exercise**. This starts a new device session, replacing an
-   unfinished one if present. Exercise selection stays on the phone.
-5. Follow the current prompt on the live screen: move the equipment into position (**WAIT_PICKUP**),
-   hold still (**SETTLING**, approximately 1.1 seconds after activity settles),
-   then perform three consistent repetitions with a short rest between them
-   (**CALIBRATING**). Keep the sensor attached to the same moving equipment.
-   Movement/hold animations and three calibration checkpoints follow tracker
-   events. They never advance a stage or invent reps. Reduced-motion settings
-   disable the animations; text and checkpoints remain available.
-6. **RUNNING** begins automatically when the firmware locks its template. Those
-   three calibration reps are included in the total. No second START is sent.
-   There are no saved per-exercise calibration profiles in this firmware.
-7. Pause/resume uses separate commands and confirmed device states. Pausing before
-   template lock causes preparation to restart on resume. Pausing after template
-   lock preserves the learned movement and total.
-8. At the target, **Finish Exercise** obtains a FINISHED snapshot and saves the
-   reported total, including extra reps, in private phone storage. It cannot
-   recover a rep that the firmware itself drops; see the final-count race in the
-   review. The next exercise learns a fresh template using the same connection.
+1. Build the firmware with your existing board and `sdkconfig` settings. See its
+   README for BNO055 wiring, NimBLE and FreeRTOS settings. Sensor initialization
+   failure prevents advertising; check the serial log if no tracker appears.
+2. Run `flutter pub get` and `flutter run` on Android. This checkout has no iOS
+   project. Allow Bluetooth/Nearby devices permissions. Older Android versions
+   also require Location permission/services for scanning.
+3. Select today's available workout and exercise. Scanning starts automatically;
+   choose your tracker. The connected view then offers **Start Exercise**.
+   An unfinished device session with no local recovery record requires confirmation
+   before replacement. Selecting a movement remains a phone-side operation.
+4. Follow the live prompt: take your starting position, hold it while movement
+   settles, then perform three consistent reps with a brief pause between them.
+   The animations illustrate the prompt; real device events advance the stages.
+   Reduced-motion settings disable repeating motion.
+5. The learned template starts normal counting automatically. The three accepted
+   calibration reps are part of the total. Pause/resume before template lock
+   restarts preparation; after template lock it retains the template and count.
+6. At the target, **Finish Exercise** waits for both firmware workers to stop and
+   drain samples, then saves the final count, including extra reps. The next
+   exercise learns a new template on the same connection.
 
-## Code map
+### Repeat an exercise or workout
 
-Paths below are relative to `lib/features/`.
+Completed items stay grey and keep their checkmarks. Tap a completed exercise to
+see its results, then use the options menu's **Repeat exercise** action. Workout
+options offer **View history** and **Repeat workout**. A confirmation sheet explains
+that the previous results remain saved before creating a new attempt.
 
-| File | Responsibility |
-| --- | --- |
-| `tracker/data/fitness_protocol.dart` | Exact 8-byte command, status and telemetry layouts; opcodes and validation. |
-| `tracker/domain/tracker_status.dart` | Eight firmware states, nine events and observed calibration progress. |
-| `tracker/data/flutter_ble_transport.dart` | Permissions, service filtering, subscriptions before commands, reads and writes. |
-| `tracker/data/ble_tracker_gateway.dart` | Serial commands, unique request IDs, matching replies, heartbeat/progress handling, disconnect errors. |
-| `workouts/presentation/workout_view_model.dart` | Local exercise association, preparation/start, pause/reconnect/stop, final-count validation and storage retries. |
-| `workouts/presentation/exercise_setup_screen.dart` | Automatic scan, device picker, and connected/start view. |
-| `workouts/presentation/live_exercise_screen.dart` | Pickup/hold/calibration guidance and live count controls in one route. Replaces the separate calibration screen. |
-| `workouts/presentation/workout_stage_view.dart` | Current-stage prompts, motion cues, calibration checkpoints and animated real rep count. |
-| `workouts/data/local_workout_repository.dart` | Durable results and dated workout IDs. |
+Repeats are available for today. A whole-workout repeat has independent progress;
+it does not clear the day's completion or lock other completed exercises again.
+The workout details screen lets you continue or end a pending repeat. History
+retains every completed attempt and any interrupted attempt the user chose to keep.
+
+### Hands-free calibration restart and audio
+
+After an incorrect first or second calibration candidate, return the equipment
+to rest and leave it still for **eight seconds**. Continuous quiet clears unfinished
+calibration and returns to pickup. Any new movement restarts the quiet timer.
+Long rests during calibration also trigger this reset; normal tracking reps are
+never cleared by this gesture. If three candidates have already locked a wrong
+template, stop and restart the exercise through the app.
+
+The volume/help icon in setup/live and **Profile → Workout guidance** offer voice
+and tones, tones only, mute, optional spoken counts, and a test sound. Android uses
+an installed offline English TTS voice; otherwise it plays short tones. Use media
+volume or connected headphones. New guidance replaces obsolete speech, heartbeats
+do not replay prompts, and audio stops in the background. The screen stays awake
+only while the live workout is visible. Calls/audio focus can interrupt guidance.
+
+Keep the BNO055 attached to the same moving weight/equipment. Push-ups now have
+an appropriate illustration, but a stationary machine-mounted tracker cannot
+measure body-only movement. Body mounting and each exercise's accuracy still need
+physical validation; illustrations do not add a new detection algorithm.
+
+## Recovery behavior
+
+The app stores the device ID, boot ID, session ID, attempt ID, last confirmed reps,
+and repeat progress before START and as the set advances. Results and journal
+changes use one serialized, flushed, atomic file replacement. Earlier version-1
+history migrates into the version-2 schema in the same `workouts-v1.json` file.
+The Git checkpoint restores code, not phone storage; the older app cannot read
+the migrated version-2 file.
+
+| Failure | Firmware behavior | App behavior |
+| --- | --- | --- |
+| Brief BLE drop while counting | Keeps counting until ten seconds have elapsed since the last valid phone contact. | Retries the same device after 1, 2, 4, then 8 seconds; restores matching cumulative reps without another START. |
+| Link lost during preparation | Pauses on disconnect/unsubscription, or after six seconds without valid contact. | Requires Resume if the device paused; preparation then restarts. |
+| Long link loss | Coordinates PAUSE after ten seconds without valid contact; preserves count/template. | Keeps confirmed reps; offers manual reconnect when bounded automatic retries end. |
+| App killed/restarted | Contact timeout pauses the device even if BLE disconnect is delayed. | Restores the local attempt. Open workout reconnects, verifies identity, and pauses any still-active set; Resume is explicit. |
+| ESP32 reboot or replacement session | New boot ID or session ID prevents old mutations. Volatile reps/template are lost on reboot. | Rejects mismatched recovery, offers **Keep recorded reps and end**, then a new attempt. Never resets another session during recovery. |
+| Sensor/worker failure | Invalid samples and stalled progress cause coordinated recovery and ERROR. Unconfirmed stopping latches ERROR until reboot. | Preserves confirmed count and shows interruption instead of claiming completion. |
+| Command manager hangs | Platform task watchdog is configured for an eight-second timeout. | Missing fresh responses disconnect the transport and trigger recovery. A reboot is detected by boot ID. |
+| App backgrounded/phone locked | Receives PAUSE when possible; contact timeout covers failed delivery. | Stops audio and reconnect attempts; returning does not automatically Resume a paused set. |
+| Lost START/FINISH reply | Request/session checks prevent applying a command to the wrong set; retries of settled actions are idempotent. | Reconnects and queries actual state. An uncertain START keeps its durable record; a matching FINISHED total can be saved. |
+| Failed result save | Device remains stopped. | Retains the frozen result and retries the same attempt ID. If the recovery journal was written, a new app process can finish saving it. |
+
+GET_STATUS runs every two seconds and renews contact only for matching boot/session
+IDs. Incoming status/telemetry freshness is monitored; six seconds without a fresh
+packet causes disconnect on the next poll. Firmware deadlines are checked by the
+manager loop, so actual timing includes scheduler/wakeup delay. The ten-second
+counting grace is measured from last contact, not exactly from radio loss.
+
+Offline stop does not prove the sensor stopped. The device contact timeout provides
+an automatic pause; reconnect or power off to confirm it. Keeping an interrupted
+result records only confirmed reps and does not mark the exercise complete. Storage
+failure can prevent the latest checkpoint from reaching disk; no implementation
+can recover sensor reps lost in a reboot before they were reported to the phone.
 
 ## Wire contract
 
-Service `12345678-1234-5678-1234-56789abcdef0`; telemetry, control, and status use
-suffixes `...def1`, `...def2`, `...def3`. All multi-byte fields are little endian.
-The firmware still declares version **1**, but this is incompatible with the old
-16-byte status / 12-byte telemetry protocol. The app rejects those old packets.
+Service `12345678-1234-5678-1234-56789abcdef0`; telemetry, control and status use
+suffixes `...def1`, `...def2`, `...def3`. All multibyte integers are little endian.
+The existing three characteristics are unchanged and all values fit the default
+20-byte ATT payload.
 
 | Packet | Byte offsets |
 | --- | --- |
-| Control, 8 bytes | 0 version; 1 command; 2–3 request ID; 4–7 reserved, all zero |
-| Status, 8 bytes | 0 version; 1 state; 2 event; 3 detail; 4–5 request ID; 6–7 total reps |
-| Telemetry, 8 bytes | 0 version; 1 event type (=1); 2–3 total reps; 4–7 uptime in milliseconds |
+| Control, 12 bytes | 0 version=2; 1 command; 2–3 request ID; 4–7 boot ID; 8–11 session ID |
+| Status, 20 bytes | 0 version=2; 1 state; 2 event; 3 detail; 4–5 request ID; 6–7 reps; 8–11 boot ID; 12–15 session ID; 16–17 revision; 18 calibration count; 19 flags |
+| Telemetry, 18 bytes | 0 version=2; 1 type=1; 2–3 reps; 4–7 uptime ms; 8–11 boot ID; 12–15 session ID; 16–17 revision |
 
 Commands: START=1, PAUSE=2, RESUME=3, RESET=4, FINISH=5, GET_STATUS=6.
 States: IDLE=0, WAIT_PICKUP=1, SETTLING=2, CALIBRATING=3, RUNNING=4, PAUSED=5,
 FINISHED=6, ERROR=7.
-
 Events: NONE=0, COMMAND_OK=1, COMMAND_REJECTED=2, HANDLING_DETECTED=3,
 HOLD_COMPLETE=4, CAL_REP=5, CAL_RESET=6, TEMPLATE_LOCKED=7, SENSOR_ERROR=8.
-CAL_REP detail is 1/2/3; COMMAND_REJECTED detail is INVALID_STATE=1, BUSY=2,
-INTERNAL_ERROR=3. Other details are not interpreted as result codes.
 
-Every command has a nonzero request ID. Mutations require a matching COMMAND_OK
-or COMMAND_REJECTED reply; GET_STATUS expects NONE or COMMAND_REJECTED with its
-request ID. Request ID zero updates the UI but never completes a command.
-A successful Bluetooth write alone is insufficient. Current firmware acknowledges
-worker dispatch, not worker completion; that limitation needs the firmware fix.
+CAL_REP detail is 1/2/3; CAL_RESET detail 1 means inactivity, 0 means rejected
+calibration. Rejection details: INVALID_STATE=1, BUSY=2, INTERNAL_ERROR=3,
+SESSION_MISMATCH=4. Status flag bit 0 means a worker operation is pending; bit 1
+means the last pause was caused by lost contact. Calibration progress is present
+in every snapshot, including READ/GET_STATUS and heartbeats.
 
-## Recovery and limits
+Boot ID is a nonzero random MCU-start nonce. The phone assigns a new nonzero
+session ID per attempt; START establishes it and RESET clears it. Worker messages
+use a separate internal generation so delayed samples cannot enter a new set.
+A wrapping 16-bit revision orders status and telemetry within one boot.
 
-- Status heartbeats (2 seconds) preserve observed calibration progress; they do
-  not carry a calibration count. A reconnect or missed progress event cannot
-  recover the exact intermediate number. RUNNING confirms all three were accepted.
-  CAL_RESET clears progress. Telemetry heartbeats (1 second) recover cumulative
-  totals while running/paused. No telemetry creates a synthetic rep.
-- Disconnect does **not** pause this firmware. The phone preserves its last known
-  count and warns that the tracker may still run. Reconnect checks the same device,
-  state and nondecreasing total, then explicitly pauses active preparation/counting.
-  A recovered FINISHED session can be saved if it meets the target.
-- There is no device session token or exercise ID. State/count checks cannot prove
-  identity after another client replaces a session with indistinguishable data.
-  Use one phone per tracker. IDLE or a decreased total is rejected as a reset.
-- A missing reply or failed write leaves the outcome uncertain. The app closes
-  that connection and requires recovery; it never blindly repeats START or treats
-  an unsolicited heartbeat as confirmation. Wrong-ID success replies produce a
-  specific firmware diagnostic. Do not work around this by reusing command IDs.
-- FINISH is not idempotent in this firmware. The app queries before stopping and
-  does not send FINISH again to an already FINISHED/IDLE device. IDLE cannot be
-  saved as a completed workout. ERROR requires RESET before a fresh START.
-- Backgrounding explicitly pauses an active session after any pending command.
-  It does not automatically resume. Force-killing the phone app may leave the
-  firmware running; no background service or process-death session restoration is
-  implemented.
-- Stop without completing writes no result. Offline stop only discards the phone
-  session; the dialog explains that reconnecting or powering off is needed to
-  stop the physical tracker. A new session resets an abandoned active session.
-- A storage failure after FINISHED keeps a frozen result in memory. Retry saves
-  the same total without restarting counting. Keep the app open until it succeeds.
-- Results use `workouts-v1.json` in application support storage, with atomic file
-  replacement. No cloud sync or account-specific backend is implemented.
+Request IDs are nonzero for phone commands and must match replies. Request ID 0
+is an unsolicited snapshot: it updates the UI but never confirms a phone command.
+Success means both workers completed the operation. Bluetooth write success alone
+is insufficient. The IDs prevent accidental stale-session actions; they are not
+BLE pairing/authentication credentials.
 
-## Validation
+## Code map and validation
 
-Run `flutter analyze`, `flutter test`, and `flutter build apk --debug`.
-The APK is `build/app/outputs/flutter-apk/app-debug.apk`.
+- `tracker/data/fitness_protocol.dart`: wire codec and validation.
+- `tracker/data/ble_tracker_gateway.dart`: serial commands, reply matching, polling,
+  revision ordering, identity binding and transport errors.
+- `workouts/presentation/workout_view_model.dart`: session/repeat ownership,
+  reconnect policy, lifecycle, final-count validation and persistence.
+- `workouts/domain/workout_journal.dart`: durable active-attempt and repeat records.
+- `workouts/data/local_workout_repository.dart`: atomic history/journal storage.
+- `workouts/presentation/workout_history_screen.dart`: attempt history and repeat flow.
+- `workouts/presentation/workout_stage_view.dart` and `exercise_illustration.dart`:
+  phase prompts, motion cues and exercise-specific vector drawings.
+- `workouts/presentation/workout_audio.dart` and Android `WorkoutAudio.kt`: cue
+  selection/settings and native speech, tones, audio focus and screen-awake adapter.
 
-Tests cover byte layouts, command/reply correlation, known firmware failures,
-preparation, calibration, pause/resume, reconnect, cancellation, final totals,
-storage retries and the full screen flow. A temporary C host harness confirmed
-that the protocol test fixtures match the real firmware encoders and reproduced
-several review findings without changing firmware files.
+Run `flutter analyze`, `flutter test`, and `flutter build apk --debug`. In the
+firmware repository run `bash tests/run.sh` and, with ESP-IDF exported, `idf.py build`.
+The app artifact is `build/app/outputs/flutter-apk/app-debug.apk`; firmware output
+is in its `build/` directory. The firmware README describes host-test limits.
 
-Hardware validation remains necessary after firmware fixes: check no movement
-produces no reps, pickup/hold/calibration transitions, three initial reps, pause
-and resume during preparation and counting, BLE disconnect/reconnect, concurrent
-FINISH/rep events, sensor loss, app backgrounding, and saved history after restart.
+Before marking this new pair hardware-tested, exercise these cases on equipment:
+
+- Pickup/hold, three consistent reps, extra reps, no-motion/no-false-count behavior.
+- Mistaken first/second candidate, eight-second rest, then successful recalibration.
+- PAUSE/FINISH at the instant a rep completes or the template locks.
+- Brief/long BLE loss; phone force-stop/relaunch; ESP32 reboot; sensor disconnection.
+- Resume after preparation versus after template lock; preserve final totals.
+- Repeat one exercise and a whole workout; close/reopen the app between exercises.
+- Voice/tones/mute, headphones, incoming calls, screen lock and reduced motion.
+
+The new firmware has not been flashed by this work. Automated tests/builds and
+rendered UI inspection are separate from radio, sensor and physical rep trials.

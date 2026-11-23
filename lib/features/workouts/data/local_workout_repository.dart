@@ -6,11 +6,12 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/workout_models.dart';
+import '../domain/workout_journal.dart';
 import 'demo_workout_repository.dart';
 import 'workout_repository.dart';
 
 /// Real completion storage; tests inject a temporary directory and fixed clock.
-class LocalWorkoutRepository implements WorkoutRepository {
+class LocalWorkoutRepository extends WorkoutRepository {
   LocalWorkoutRepository({
     Future<Directory> Function()? directory,
     DateTime Function()? now,
@@ -23,6 +24,14 @@ class LocalWorkoutRepository implements WorkoutRepository {
   File? _file;
   final Map<String, WorkoutPlan> _plans = {};
   final Map<String, ExerciseResult> _results = {};
+  final Map<String, ExerciseResult> _attempts = {};
+  WorkoutJournal _journal = const WorkoutJournal();
+  Future<void> _writes = Future.value();
+  Future<T> _mutate<T>(Future<T> Function() operation) {
+    final next = _writes.then((_) => operation());
+    _writes = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return next;
+  }
 
   /// Load once; a failed read can be retried without replacing the stored file.
   Future<void> _ensureLoaded() async {
@@ -40,10 +49,12 @@ class LocalWorkoutRepository implements WorkoutRepository {
     _file = File('${directory.path}/workouts-v1.json');
     final plans = <String, WorkoutPlan>{};
     final results = <String, ExerciseResult>{};
+    final attempts = <String, ExerciseResult>{};
+    var journal = const WorkoutJournal();
     if (await _file!.exists()) {
       final data =
           jsonDecode(await _file!.readAsString()) as Map<String, dynamic>;
-      if (data['version'] != 1) {
+      if (data['version'] != 1 && data['version'] != 2) {
         throw const FormatException('Unsupported workout history version.');
       }
       for (final value in data['plans'] as List<dynamic>) {
@@ -52,19 +63,27 @@ class LocalWorkoutRepository implements WorkoutRepository {
       }
       for (final value in data['results'] as List<dynamic>) {
         final item = value as Map<String, dynamic>;
-        final result = ExerciseResult(
-          workoutId: item['workoutId'] as String,
-          exerciseId: item['exerciseId'] as String,
-          repetitions: item['repetitions'] as int,
-          deviceId: item['deviceId'] as String,
-          completedAt: DateTime.parse(item['completedAt'] as String),
-        );
+        final result = ExerciseResult.fromJson(item);
         if (result.repetitions < 0 || !plans.containsKey(result.workoutId)) {
           throw const FormatException('Invalid saved workout result.');
         }
-        results[result.key] = result;
+        attempts[result.recordId] = result;
+        if (result.completed &&
+            (results[result.key] == null ||
+                !result.completedAt
+                    .isBefore(results[result.key]!.completedAt))) {
+          results[result.key] = result;
+        }
+      }
+      if (data["journal"] != null) {
+        journal =
+            WorkoutJournal.fromJson(data["journal"] as Map<String, dynamic>);
       }
     }
+    _attempts
+      ..clear()
+      ..addAll(attempts);
+    _journal = journal;
     _plans
       ..clear()
       ..addAll(plans);
@@ -74,36 +93,37 @@ class LocalWorkoutRepository implements WorkoutRepository {
   }
 
   @override
-  Future<List<WorkoutPlan>> fetchWorkouts() async {
-    await _ensureLoaded();
-    // Date-based IDs prevent yesterday's completion from unlocking today's plan.
-    // Previously stored plans stay in history when a new day's schedule is added.
-    final now = _now();
-    final samples = await DemoWorkoutRepository(today: now).fetchWorkouts();
-    final nextPlans = Map<String, WorkoutPlan>.of(_plans);
-    for (final sample in samples) {
-      final date = sample.scheduledAt;
-      final dateKey =
-          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      // Stable workout title identifies the template independent of relative day.
-      final id = '$dateKey:${sample.title.toLowerCase().replaceAll(' ', '-')}';
-      nextPlans.putIfAbsent(
-          id,
-          () => WorkoutPlan(
-                id: id,
-                title: sample.title,
-                description: sample.description,
-                scheduledAt: date,
-                exercises: sample.exercises,
-              ));
-    }
-    await _write(nextPlans, _results);
-    _plans
-      ..clear()
-      ..addAll(nextPlans);
-    return List.unmodifiable(_plans.values.toList()
-      ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt)));
-  }
+  Future<List<WorkoutPlan>> fetchWorkouts() => _mutate(() async {
+        await _ensureLoaded();
+        // Date-based IDs prevent yesterday's completion from unlocking today's plan.
+        // Previously stored plans stay in history when a new day's schedule is added.
+        final now = _now();
+        final samples = await DemoWorkoutRepository(today: now).fetchWorkouts();
+        final nextPlans = Map<String, WorkoutPlan>.of(_plans);
+        for (final sample in samples) {
+          final date = sample.scheduledAt;
+          final dateKey =
+              '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+          // Stable workout title identifies the template independent of relative day.
+          final id =
+              '$dateKey:${sample.title.toLowerCase().replaceAll(' ', '-')}';
+          nextPlans.putIfAbsent(
+              id,
+              () => WorkoutPlan(
+                    id: id,
+                    title: sample.title,
+                    description: sample.description,
+                    scheduledAt: date,
+                    exercises: sample.exercises,
+                  ));
+        }
+        await _write(nextPlans);
+        _plans
+          ..clear()
+          ..addAll(nextPlans);
+        return List.unmodifiable(_plans.values.toList()
+          ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt)));
+      });
 
   @override
   Future<Map<String, ExerciseResult>> fetchResults() async {
@@ -113,27 +133,76 @@ class LocalWorkoutRepository implements WorkoutRepository {
   }
 
   @override
-  Future<void> saveResult(ExerciseResult result) async {
+  Future<List<ExerciseResult>> fetchHistory() async {
     await _ensureLoaded();
-    final plan = _plans[result.workoutId];
-    if (plan == null ||
-        !plan.exercises.any((e) =>
-            e.id == result.exerciseId && result.repetitions >= e.targetReps)) {
-      throw StateError('The completed exercise is not in the stored plan.');
-    }
-    final next = Map<String, ExerciseResult>.of(_results)
-      ..[result.key] = result;
-    await _write(_plans, next);
-    _results
-      ..clear()
-      ..addAll(next);
+    await _writes;
+    return List.unmodifiable(_attempts.values);
   }
+
+  @override
+  Future<WorkoutJournal> readJournal() async {
+    await _ensureLoaded();
+    await _writes;
+    return _journal;
+  }
+
+  @override
+  Future<void> writeJournal(WorkoutJournal value) => _mutate(() async {
+        await _ensureLoaded();
+        await _write(_plans, journal: value);
+        _journal = value;
+      });
+
+  @override
+  Future<void> saveResult(ExerciseResult result) => _commit(result, null);
+
+  @override
+  Future<void> commitResult(ExerciseResult result, WorkoutJournal journal) =>
+      _commit(result, journal);
+
+  Future<void> _commit(ExerciseResult result, WorkoutJournal? journal) =>
+      _mutate(() async {
+        await _ensureLoaded();
+        final plan = _plans[result.workoutId];
+        if (plan == null ||
+            result.repetitions < 0 ||
+            result.repetitions > 65535 ||
+            !plan.exercises.any((e) =>
+                e.id == result.exerciseId &&
+                (!result.completed || result.repetitions >= e.targetReps))) {
+          throw StateError(
+              'The exercise result is not valid for the stored plan.');
+        }
+        final existing = _attempts[result.recordId];
+        if (existing != null &&
+            jsonEncode(existing.toJson()) != jsonEncode(result.toJson())) {
+          throw StateError(
+              'This attempt already has a different saved result.');
+        }
+        final attempts = Map<String, ExerciseResult>.of(_attempts)
+          ..[result.recordId] = result;
+        final next = Map<String, ExerciseResult>.of(_results);
+        if (result.completed &&
+            (next[result.key] == null ||
+                !result.completedAt.isBefore(next[result.key]!.completedAt))) {
+          next[result.key] = result;
+        }
+        await _write(_plans, attempts: attempts, journal: journal);
+        _attempts
+          ..clear()
+          ..addAll(attempts);
+        _results
+          ..clear()
+          ..addAll(next);
+        if (journal != null) _journal = journal;
+      });
 
   /// Replace the file only after a complete, flushed JSON write succeeds.
   Future<void> _write(Map<String, WorkoutPlan> plans,
-      Map<String, ExerciseResult> results) async {
+      {Map<String, ExerciseResult>? attempts, WorkoutJournal? journal}) async {
     final data = <String, Object>{
-      'version': 1,
+      'version': 2,
+      'journal': (journal ?? _journal).toJson(),
       'plans': plans.values
           .map((p) => {
                 'id': p.id,
@@ -151,15 +220,7 @@ class LocalWorkoutRepository implements WorkoutRepository {
                     .toList(),
               })
           .toList(),
-      'results': results.values
-          .map((r) => {
-                'workoutId': r.workoutId,
-                'exerciseId': r.exerciseId,
-                'repetitions': r.repetitions,
-                'deviceId': r.deviceId,
-                'completedAt': r.completedAt.toIso8601String(),
-              })
-          .toList(),
+      'results': (attempts ?? _attempts).values.map((r) => r.toJson()).toList(),
     };
     final temporary = File('${_file!.path}.tmp');
     await temporary.writeAsString(jsonEncode(data), flush: true);

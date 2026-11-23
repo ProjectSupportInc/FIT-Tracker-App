@@ -11,6 +11,7 @@ import '../domain/workout_models.dart';
 import '../../tracker/domain/tracker_status.dart';
 import 'exercise_complete_screen.dart';
 import 'workout_stage_view.dart';
+import 'workout_audio.dart';
 
 /// Replaces ExerciseSetupScreen after START; guides calibration and counting; opens ExerciseCompleteScreen after saving.
 class LiveExerciseScreen extends StatefulWidget {
@@ -33,9 +34,47 @@ class LiveExerciseScreen extends StatefulWidget {
 class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
   /// Prevents repeated actions while an asynchronous request or confirmation is in progress.
   bool _busy = false;
+  WorkoutAudio? _audio;
 
   /// Last action failure, displayed beside the controls so a retry is possible.
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _audio = AppServices.of(context).audio;
+      _audio?.setWorkoutVisible(true);
+      final vm = AppServices.of(context).workouts;
+      if (vm.isDisconnected && !vm.sessionInvalid && !vm.hasPendingResult) {
+        _reconnect();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _audio?.setWorkoutVisible(false);
+    super.dispose();
+  }
+
+  Future<void> _keepInterrupted() async {
+    final vm = AppServices.of(context).workouts;
+    if (_busy || vm.isTrackerBusy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await vm.keepInterruptedResult();
+      if (mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   /// All live commands share the same UI guard as finish/stop.
   Future<void> _togglePause() async {
@@ -163,6 +202,10 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
             final disconnected = vm.isDisconnected;
             final error = _error ?? vm.trackerError;
             final state = vm.trackerStatus?.state;
+            final needsRecovery = disconnected ||
+                vm.sessionInvalid ||
+                state == TrackerState.error ||
+                (state == TrackerState.finished && !vm.canFinish);
             final showFinish = vm.hasPendingResult ||
                 (!disconnected &&
                     (state == TrackerState.running ||
@@ -171,6 +214,13 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
             return Scaffold(
               appBar: AppBar(
                 title: Text(widget.exercise.name),
+                actions: [
+                  IconButton(
+                      tooltip: 'Guidance and calibration help',
+                      icon: const Icon(Icons.volume_up_outlined),
+                      onPressed: () => showWorkoutHelp(
+                          context, AppServices.of(context).audio))
+                ],
                 leading: IconButton(
                     onPressed: busy ? null : _stop,
                     tooltip: 'Stop workout',
@@ -191,6 +241,8 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
                             children: [
                               WorkoutStageView(
                                 status: vm.trackerStatus,
+                                exerciseKind: widget.exercise.kind,
+                                interrupted: vm.sessionInvalid,
                                 repetitions: vm.liveReps,
                                 target: widget.exercise.targetReps,
                                 disconnected: disconnected,
@@ -237,18 +289,24 @@ class _LiveExerciseScreenState extends State<LiveExerciseScreen> {
                                       const LinearProgressIndicator(),
                                       const SizedBox(height: 16),
                                     ],
-                                    if (disconnected &&
+                                    if (needsRecovery &&
                                         !vm.hasPendingResult) ...[
                                       const Text(
-                                          'Your tracker may still be counting. Reconnect to check and pause it.',
+                                          'Your last confirmed count is preserved. The tracker pauses after prolonged loss of contact.',
                                           textAlign: TextAlign.center),
                                       const SizedBox(height: 12),
-                                      OutlinedButton.icon(
-                                          onPressed: busy ? null : _reconnect,
-                                          icon: const Icon(
-                                              Icons.bluetooth_searching),
-                                          label:
-                                              const Text('Reconnect tracker')),
+                                      if (!vm.sessionInvalid)
+                                        OutlinedButton.icon(
+                                            onPressed: busy ? null : _reconnect,
+                                            icon: const Icon(
+                                                Icons.bluetooth_searching),
+                                            label: const Text(
+                                                'Reconnect tracker')),
+                                      TextButton(
+                                          onPressed:
+                                              busy ? null : _keepInterrupted,
+                                          child: const Text(
+                                              'Keep recorded reps and end')),
                                     ] else if (!vm.hasPendingResult &&
                                         state != TrackerState.finished &&
                                         state != TrackerState.error)

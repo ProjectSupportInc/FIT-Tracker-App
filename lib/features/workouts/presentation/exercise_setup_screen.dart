@@ -1,3 +1,4 @@
+import 'workout_audio.dart';
 // Connects a tracker and starts one session that learns and counts the movement.
 // Imported by workout_detail_screen.dart and exercise_complete_screen.dart.
 import 'package:flutter/material.dart';
@@ -138,7 +139,13 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
             workout: widget.workout, exercise: widget.exercise),
       ));
     } catch (error) {
-      _error(error);
+      if (mounted && vm.hasActiveSession) {
+        Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
+            builder: (_) => LiveExerciseScreen(
+                workout: widget.workout, exercise: widget.exercise)));
+      } else {
+        _error(error);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -159,7 +166,13 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
           // Avoid leaving while START is in flight and abandoning a running sensor.
           canPop: !busy,
           child: Scaffold(
-            appBar: AppBar(title: const Text('Get ready')),
+            appBar: AppBar(title: const Text('Get ready'), actions: [
+              IconButton(
+                  tooltip: 'Guidance and calibration help',
+                  icon: const Icon(Icons.volume_up_outlined),
+                  onPressed: () =>
+                      showWorkoutHelp(context, AppServices.of(context).audio))
+            ]),
             body: SafeArea(
               top: false,
               child: ListView(
@@ -293,7 +306,9 @@ class _ExerciseSetupScreenState extends State<ExerciseSetupScreen> {
             textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
         const SizedBox(height: 10),
         Text(
-            'Secure the sensor to your equipment. We’ll guide you as you move.',
+            widget.exercise.kind.contains('push')
+                ? 'The tracker must move with your torso for push-ups. Body-mounted counting needs checking with your setup.'
+                : 'Secure the tracker to the moving weight or equipment, then take your starting position.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodyLarge
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),

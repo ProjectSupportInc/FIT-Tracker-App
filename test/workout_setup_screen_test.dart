@@ -27,7 +27,7 @@ class _UiTracker extends TestTracker {
   }
 }
 
-class _UiRepository implements WorkoutRepository {
+class _UiRepository extends WorkoutRepository {
   _UiRepository(this.plan);
   final WorkoutPlan plan;
   final saved = <String, ExerciseResult>{};
@@ -107,20 +107,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(LiveExerciseScreen), findsOneWidget);
     expect(flow.tracker.startCalls, 1);
-    expect(find.text('Lift into position'), findsOneWidget);
+    expect(find.text('Take your starting position'), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
     expect(flow.vm.liveReps, 0);
 
     flow.tracker.publish(TrackerState.settling);
     await tester.pumpAndSettle();
-    expect(find.text('Hold still'), findsOneWidget);
+    expect(find.text('Hold this position'), findsOneWidget);
     flow.tracker.publish(TrackerState.calibrating, calReps: 1);
     await tester.pumpAndSettle();
-    expect(find.text('1 of 3 reps learned'), findsOneWidget);
+    expect(find.text('1 of 3 reps recorded'), findsOneWidget);
     flow.tracker.completeCalibration();
     await tester.pumpAndSettle();
     expect(flow.vm.liveReps, 3);
-    expect(find.text('Movement learned'), findsOneWidget);
+    expect(find.text('Ready. Keep going.'), findsOneWidget);
     expect(flow.tracker.startCalls, 1);
 
     flow.tracker.emitReps(7);
@@ -188,7 +188,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Start Exercise'));
     await tester.pumpAndSettle();
-    expect(find.text('Lift into position'), findsOneWidget);
+    expect(find.text('Take your starting position'), findsOneWidget);
     expect(tester.takeException(), isNull);
     flow.tracker.publish(TrackerState.calibrating, calReps: 2);
     await tester.pumpAndSettle();

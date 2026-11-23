@@ -13,6 +13,8 @@ import '../../../core/widgets/fit_widgets.dart';
 import '../domain/workout_models.dart';
 import 'exercise_setup_screen.dart';
 import 'workout_view_model.dart';
+import 'workout_history_screen.dart';
+import 'exercise_illustration.dart';
 
 /// Route opened by TodayScreen/WorkoutsScreen; passes the selected plan to ExerciseSetupScreen.
 class WorkoutDetailScreen extends StatelessWidget {
@@ -33,7 +35,26 @@ class WorkoutDetailScreen extends StatelessWidget {
           // Number of saved exercises used in the completion fraction and progress bar.
           final completed = vm.doneCount(workout);
           return Scaffold(
-            appBar: AppBar(title: const Text('Workout Details')),
+            appBar: AppBar(title: const Text('Workout Details'), actions: [
+              PopupMenuButton<String>(
+                  tooltip: 'Workout options',
+                  onSelected: (action) {
+                    if (action == 'repeat') {
+                      confirmRepeat(context, workout);
+                    } else {
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) =>
+                              WorkoutHistoryScreen(workout: workout)));
+                    }
+                  },
+                  itemBuilder: (_) => [
+                        const PopupMenuItem(
+                            value: 'history', child: Text('View history')),
+                        if (vm.canRepeat(workout) && vm.doneCount(workout) > 0)
+                          const PopupMenuItem(
+                              value: 'repeat', child: Text('Repeat workout')),
+                      ]),
+            ]),
             body: ListView(
                 padding: const EdgeInsets.fromLTRB(22, 12, 22, 26),
                 children: [
@@ -62,6 +83,41 @@ class WorkoutDetailScreen extends StatelessWidget {
                               borderRadius: BorderRadius.circular(10)),
                         ])),
                   ])),
+                  if (vm.repeat?.workoutId == workout.id &&
+                      !vm.hasActiveSession) ...[
+                    const SizedBox(height: 18),
+                    FitCard(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                          Text('Repeat in progress',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          Text(
+                              'Exercise ${vm.repeat!.index + 1} of ${vm.repeat!.exerciseIds.length}'),
+                          const SizedBox(height: 12),
+                          AccentButton('Continue repeat',
+                              onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                      builder: (_) => ExerciseSetupScreen(
+                                          workout: workout,
+                                          exercise: workout.exercises
+                                              .firstWhere((e) =>
+                                                  e.id ==
+                                                  vm.repeat!.exerciseId))))),
+                          TextButton(
+                              onPressed: () async {
+                                try {
+                                  await vm.cancelRepeat();
+                                } catch (error) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('$error')));
+                                  }
+                                }
+                              },
+                              child: const Text('End repeat')),
+                        ])),
+                  ],
                   const SizedBox(height: 27),
                   const Text('Your exercise sequence',
                       style:
@@ -89,17 +145,22 @@ class WorkoutDetailScreen extends StatelessWidget {
     // Whether all earlier exercises are complete.
     final unlocked = vm.exerciseUnlocked(workout, exercise);
     // Whether an exercise row can be opened: unlocked and not already finished.
-    final enabled = unlocked && !finished;
+    final enabled =
+        unlocked && !finished && vm.isToday(workout) && !vm.hasActiveSession;
     // Saved result for this exercise; null if no completion record exists.
     final result = vm.resultFor(workout, exercise);
     return Opacity(
       opacity: enabled ? 1 : .57,
       child: FitCard(
-        onTap: enabled
+        onTap: finished
             ? () => Navigator.of(context).push(MaterialPageRoute<void>(
                 builder: (_) =>
-                    ExerciseSetupScreen(workout: workout, exercise: exercise)))
-            : null,
+                    WorkoutHistoryScreen(workout: workout, exercise: exercise)))
+            : enabled
+                ? () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => ExerciseSetupScreen(
+                        workout: workout, exercise: exercise)))
+                : null,
         child: Row(children: [
           CircleAvatar(
             backgroundColor: enabled
@@ -108,9 +169,8 @@ class WorkoutDetailScreen extends StatelessWidget {
             child: finished
                 ? const Icon(Icons.check, color: FitColors.ink)
                 : unlocked
-                    ? Text('${index + 1}',
-                        style: const TextStyle(
-                            color: FitColors.ink, fontWeight: FontWeight.w900))
+                    ? ExerciseIllustration(
+                        kind: exercise.kind, size: 34, color: FitColors.ink)
                     : const Icon(Icons.lock_outline, size: 18),
           ),
           const SizedBox(width: 14),
@@ -129,6 +189,14 @@ class WorkoutDetailScreen extends StatelessWidget {
                         fontSize: 12,
                         color: Theme.of(context).colorScheme.onSurfaceVariant)),
               ])),
+          if (!finished && vm.historyFor(workout, exercise).isNotEmpty)
+            IconButton(
+                tooltip: 'Exercise history',
+                icon: const Icon(Icons.history),
+                onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => WorkoutHistoryScreen(
+                            workout: workout, exercise: exercise)))),
           Icon(finished
               ? Icons.check_circle_outline
               : enabled

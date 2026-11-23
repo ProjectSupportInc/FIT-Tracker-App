@@ -11,6 +11,11 @@ class MockTrackerGateway implements TrackerGateway {
       StreamController<TrackerStatus?>.broadcast(sync: true);
   TrackerDevice? device;
   TrackerStatus? _status;
+  int bootId = 1;
+  int sessionId = 0;
+  @override
+  void bindSession({required int bootId, required int sessionId}) {}
+
   TrackerState _beforePause = TrackerState.running;
 
   @override
@@ -31,6 +36,8 @@ class MockTrackerGateway implements TrackerGateway {
   void publish(TrackerState state, {int? reps, int calReps = 0}) =>
       emitStatus(TrackerStatus(
           state: state,
+          bootId: bootId,
+          sessionId: sessionId,
           repetitions: reps ?? _status?.repetitions ?? 0,
           calibrationReps: calReps));
 
@@ -56,8 +63,11 @@ class MockTrackerGateway implements TrackerGateway {
   @override
   Future<void> refreshStatus() async => statusController.add(_status);
   @override
-  Future<void> startCounting() async =>
-      publish(TrackerState.waitPickup, reps: 0);
+  Future<void> startCounting({int? sessionId}) async {
+    this.sessionId = sessionId ?? this.sessionId + 1;
+    publish(TrackerState.waitPickup, reps: 0);
+  }
+
   @override
   Future<void> pauseCounting() async {
     _beforePause = _status!.state;
@@ -69,7 +79,11 @@ class MockTrackerGateway implements TrackerGateway {
       ? TrackerState.waitPickup
       : TrackerState.running);
   @override
-  Future<void> reset() async => publish(TrackerState.idle, reps: 0);
+  Future<void> reset() async {
+    sessionId = 0;
+    publish(TrackerState.idle, reps: 0);
+  }
+
   @override
   Future<void> stopCounting() async => publish(TrackerState.finished);
   @override

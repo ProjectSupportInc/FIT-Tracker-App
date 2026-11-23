@@ -16,6 +16,7 @@ import 'package:flutter/widgets.dart';
 
 import '../features/auth/presentation/auth_view_model.dart';
 import '../features/workouts/presentation/workout_view_model.dart';
+import '../features/workouts/presentation/workout_audio.dart';
 
 /// Dependency injection boundary for UI features.
 /// Shared service container. Screens use AppServices.of(context) to find the same controllers.
@@ -25,6 +26,7 @@ class AppServices extends InheritedWidget {
     super.key,
     required this.auth,
     required this.workouts,
+    this.audio,
     required super.child,
   });
 
@@ -33,6 +35,7 @@ class AppServices extends InheritedWidget {
 
   /// Shared workout controller found by screens through AppServices.of(context).
   final WorkoutViewModel workouts;
+  final WorkoutAudio? audio;
 
   /// Finds the nearest AppServices ancestor using context; called by screens to access shared controllers.
   static AppServices of(BuildContext context) {
@@ -45,5 +48,7 @@ class AppServices extends InheritedWidget {
   /// Flutter calls this when AppServices is replaced; dependents rebuild if controller identities change.
   @override
   bool updateShouldNotify(AppServices oldWidget) =>
-      auth != oldWidget.auth || workouts != oldWidget.workouts;
+      auth != oldWidget.auth ||
+      workouts != oldWidget.workouts ||
+      audio != oldWidget.audio;
 }

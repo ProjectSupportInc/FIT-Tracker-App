@@ -35,6 +35,11 @@ class TrackerStatus {
     this.detail = 0,
     this.requestId = 0,
     this.calibrationReps = 0,
+    this.bootId = 1,
+    this.sessionId = 0,
+    this.revision = 0,
+    this.commandPending = false,
+    this.linkPaused = false,
   });
 
   final TrackerState state;
@@ -45,12 +50,17 @@ class TrackerStatus {
   /// Zero means an unsolicited update, never a command acknowledgement.
   final int requestId;
 
-  /// Progress remembered from events on this connection; not a persisted profile.
-  /// Heartbeats do not contain this field. Unknown/missed progress stays at zero.
+  /// A complete snapshot includes progress, even after reconnection.
   final int calibrationReps;
+  final int bootId;
+  final int sessionId;
+  final int revision;
+  final bool commandPending;
+  final bool linkPaused;
   static const calibrationTarget = 3;
 
-  TrackerStatus copyWith({int? repetitions, int? calibrationReps}) =>
+  TrackerStatus copyWith(
+          {int? repetitions, int? calibrationReps, int? revision}) =>
       TrackerStatus(
         state: state,
         repetitions: repetitions ?? this.repetitions,
@@ -58,6 +68,11 @@ class TrackerStatus {
         detail: detail,
         requestId: requestId,
         calibrationReps: calibrationReps ?? this.calibrationReps,
+        bootId: bootId,
+        sessionId: sessionId,
+        revision: revision ?? this.revision,
+        commandPending: commandPending,
+        linkPaused: linkPaused,
       );
 }
 

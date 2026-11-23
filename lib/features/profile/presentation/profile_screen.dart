@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../../../app/app_services.dart';
 import '../../../app/fittracker_theme.dart';
 import '../../../core/widgets/fit_widgets.dart';
+import '../../workouts/presentation/workout_audio.dart';
 
 /// Settings route opened by the account icon in MainShell.
 class ProfileScreen extends StatelessWidget {
@@ -48,6 +49,9 @@ class ProfileScreen extends StatelessWidget {
           secondary: Icon(theme.isDark ? Icons.dark_mode : Icons.light_mode,
               color: FitColors.lime),
         )),
+        const SizedBox(height: 18),
+        if (AppServices.of(context).audio != null)
+          WorkoutAudioSettings(audio: AppServices.of(context).audio!),
         const SizedBox(height: 18),
         OutlinedButton.icon(
           onPressed: () async {

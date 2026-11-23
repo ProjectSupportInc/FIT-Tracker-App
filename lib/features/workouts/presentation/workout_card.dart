@@ -60,8 +60,14 @@ class WorkoutCard extends StatelessWidget {
                   : FitColors.lime,
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(locked ? Icons.lock_outline : Icons.fitness_center,
-                color: locked ? null : FitColors.ink, size: 28),
+            child: Icon(
+                status == WorkoutAvailability.completed
+                    ? Icons.check_circle_outline
+                    : locked
+                        ? Icons.lock_outline
+                        : Icons.fitness_center,
+                color: locked ? null : FitColors.ink,
+                size: 28),
           ),
           const SizedBox(width: 14),
           Expanded(

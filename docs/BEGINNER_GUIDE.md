@@ -67,7 +67,7 @@ All paths below link to actual application source. Private `_...State` classes l
 | --- | --- |
 | [main.dart](../lib/main.dart) | `main()` initializes Flutter bindings and calls `runApp(FitTrackerApp())`. |
 | [fittracker_app.dart](../lib/app/fittracker_app.dart) | `FitTrackerApp` / `_FitTrackerAppState`: `initState()` creates auth/workout controllers and loads plans. `build()` installs services, theme and sign-in/home selection. `dispose()` releases controllers. |
-| [app_services.dart](../lib/app/app_services.dart) | `AppServices`: `auth` and `workouts` are shared controllers. Screens call `of(context)`. `updateShouldNotify()` compares controller identities. |
+| [app_services.dart](../lib/app/app_services.dart) | `AppServices`: `auth`, `workouts` and `audio` are shared controllers. Screens call `of(context)`. `updateShouldNotify()` compares controller identities. |
 | [fittracker_theme.dart](../lib/app/fittracker_theme.dart) | `FitColors` supplies colors throughout the UI. `fitTheme(brightness)` builds both themes for the root. `ThemeViewModel.mode/isDark/toggle()` connect the root app to the profile switch. |
 | [date_labels.dart](../lib/core/utils/date_labels.dart) | `weekdayLabel`, `shortWeekday`, `shortMonth`, `longDate`, `shortDate`, `friendlyTime` format labels; `isSameDate` supports calendar filtering and workout rules. Callers include Today, Workouts, cards, details and Progress. |
 | [fit_widgets.dart](../lib/core/widgets/fit_widgets.dart) | `FitCard`, `SectionHeading`, `FitBadge`, `AccentButton`, `StatTile` are shared UI building blocks. Their fields are inputs from the parent screen; `build()` turns those inputs into widgets. |
@@ -94,24 +94,44 @@ All paths below link to actual application source. Private `_...State` classes l
 | [exercise_setup_screen.dart](../lib/features/workouts/presentation/exercise_setup_screen.dart) | `ExerciseSetupScreen` / State: `_scan/_connect/_prepare/_start` handle real BLE actions; `_error` displays failures. Entry starts scanning or prepares the existing connection. `_devicePicker/_readyToStart` show the relevant next action. |
 | [live_exercise_screen.dart](../lib/features/workouts/presentation/live_exercise_screen.dart) | `LiveExerciseScreen` / State: `_confirmStop/_stop/_finish` handle exit/save; pause and reconnect actions use the controller. Passes device status, live reps and target to `WorkoutStageView`. |
 | [workout_stage_view.dart](../lib/features/workouts/presentation/workout_stage_view.dart) | `WorkoutStageView` translates device states into prompts. `_movementCue` animates pickup/stillness, `_calibrationCheckpoints` shows accepted reps, and `_repCounter` animates real count changes. `_syncMotion` stops repeating cues in the background or when reduced motion is enabled. It never sends commands or generates reps. |
-| [exercise_complete_screen.dart](../lib/features/workouts/presentation/exercise_complete_screen.dart) | `ExerciseCompleteScreen` reads `result`, finds `index/next`, and checks `workoutDone`; its buttons return to details or replace the route with next-exercise setup. |
+| [exercise_complete_screen.dart](../lib/features/workouts/presentation/exercise_complete_screen.dart) | `ExerciseCompleteScreen` reads `result`, uses repeat-aware `lastFinishNextExercise`, and checks `workoutDone`; its buttons return to details or replace the route with next-exercise setup. |
+
+### Recovery, history and sound files
+
+| File | Called by and purpose |
+| --- | --- |
+| [workout_journal.dart](../lib/features/workouts/domain/workout_journal.dart) | `ActiveExercise` identifies the phone attempt and device session; `WorkoutRepeat` tracks a separate repeat; `WorkoutJournal` stores both. The controller/repository read and write these records. |
+| [local_workout_repository.dart](../lib/features/workouts/data/local_workout_repository.dart) | `writeJournal` checkpoints recovery; `commitResult` saves one unique attempt and updates the journal in the same atomic file replacement. `fetchHistory` returns all attempts; `fetchResults` returns latest completed results. |
+| [workout_history_screen.dart](../lib/features/workouts/presentation/workout_history_screen.dart) | Completed tiles and workout options open history. `confirmRepeat` explains preservation and starts a new attempt after confirmation. |
+| [exercise_illustration.dart](../lib/features/workouts/presentation/exercise_illustration.dart) | Details/live stages choose a vector pose by exercise kind. Motion only illustrates the instruction; it cannot create counted reps. |
+| [workout_audio.dart](../lib/features/workouts/presentation/workout_audio.dart) | Root creates `WorkoutAudio`; live-screen visibility and app lifecycle enable cues. `_update` compares device state/count with the previous cue. Settings/help call preferences and sound preview. |
+| [WorkoutAudio.kt](../android/app/src/main/kotlin/com/repform/repform_app/WorkoutAudio.kt) | MainActivity hosts this MethodChannel adapter. Android TTS, tones, audio focus, preferences and keeping the live screen awake stay outside Dart workout policy. |
+
+`ExerciseResult.key` still groups an exercise for completion rules. Its `recordId`
+identifies an individual attempt, so repeating an exercise never overwrites the
+previous attempt. `completed: false` means interrupted, not a successfully finished
+exercise. In firmware, `app/` coordinates sessions while `platform/runtime/` and
+`platform/nvs/` isolate ESP-specific APIs; `app_init()` retains `app_result_t`.
 
 ### Workout controller call map
 
 | Member | Caller and purpose |
 | --- | --- |
-| `load()` | Root app `initState`; fetch plans/results, set `isLoaded`, notify screens. |
+| `load()` | Root app `initState`; fetch plans/history and recovery journal, restore any active attempt, set `isLoaded`, notify screens. |
 | `workouts`, `results` | Read-only collection views for list/progress screens. |
 | `status(workout)` | Today, Workouts, WorkoutCard and start validation; delegates to policy with the current date. |
 | `workoutComplete`, `exerciseComplete`, `exerciseUnlocked` | Detail/progress/completion UI and controller validation; delegate to policy using stored results. |
 | `doneCount`, `resultFor` | Today/details/progress/completion need counts or one saved record. |
 | `scan`, `connect`, `connectedDevice` | Setup device selection; connection also appears in the live screen and saved result. |
 | `prepareExercise`, `canStartExercise`, `isPreparing` | Selects the movement locally, reads current status, and exposes preparation state. There are no saved firmware profiles. |
-| `startExercise` | Setup Start button; checks rules/device, resets `_reps`, resets any abandoned device session, and sends START for preparation/calibration/counting. |
+| `startExercise` | Setup Start button; checks rules/device, resets `_reps`, resets any abandoned device session, writes a recovery record, then sends START for preparation/calibration/counting. |
 | `liveReps`, `isPaused`, `togglePause` | Live screen’s counter, status, and pause/resume button. |
 | `isRunning` | Session flag currently exposed for consumers/tests; no app screen reads it yet. |
 | `stopWithoutSaving` | Live stop flow; stops the connected tracker and clears active exercise state; offline discard cannot stop the device. |
 | `finishExercise` | Live Finish button; checks target, confirms stopping and final count, saves an `ExerciseResult`, then notifies screens. |
+| `beginRepeat`, `cancelRepeat`, `historyFor` | Result/workout options start an independent repeat or show earlier attempts; completion stays intact. |
+| `reconnectActiveExercise`, `keepInterruptedResult` | Recover the same boot/session or keep confirmed reps as interrupted; neither resets a replacement session. |
+| `_checkpoint`, `_writeJournal` | Serialize active-attempt updates to storage. A failed write remains visible; result commits clear the journal atomically. |
 | `dispose` | Root cleanup; cancels rep/status subscriptions and disconnects/disposes the tracker. |
 
 ## How a repetition reaches the screen
@@ -165,7 +185,7 @@ Flutter calls `createState()`, `initState()`, `build()`, and `dispose()` through
 
 The screens, workout-order rules, BLE scanning/connection, sensor calibration, counting, and private-file result storage are implemented. Google sign-in still returns a fixed demo identity, and prescriptions come from a starter schedule. The app does not use the mock tracker unless it is explicitly injected by tests.
 
-The FreeRTOS firmware uses a BNO055 sampling task and a learned waveform detector task. Mounting and detection accuracy must be validated for each real exercise. Completed history survives app restart; live sessions and pending storage retries do not survive process death. Each session learns a fresh template, with three calibration reps included in the total. Firmware integration blockers and proposed fixes are recorded in [the firmware review](FREERTOS_FIRMWARE_REVIEW.md). See [the recovery guide](BLE_WORKOUT_SETUP.md) for disconnect, backgrounding, sensor faults, permission errors and storage retry behavior.
+The FreeRTOS firmware uses a BNO055 sampling task and a learned waveform detector task. Mounting and detection accuracy must be validated for each real exercise. History, active-attempt identity, repeat progress and checkpointed final-result retries survive app restart. The tracker’s volatile count does not survive an ESP32 reboot; only phone-confirmed reps can be kept. Each session learns a fresh template, with three calibration reps included in the total. The resolved firmware issues and historical review are recorded in [the firmware review](FREERTOS_FIRMWARE_REVIEW.md). See [the recovery guide](BLE_WORKOUT_SETUP.md) for disconnect, backgrounding, sensor faults, permission errors and storage retry behavior.
 
 ### Other project files
 
@@ -188,3 +208,5 @@ flutter test
 ```
 
 In your editor, use **Go to Definition** on a name to open its declaration and **Find All References** to see exact current call sites. For example, follow the Finish button to `_finish()`, then `finishExercise()`, then `saveResult()`. The inline comments explain why each step exists; references show where it is used as the project changes.
+
+Recovery regressions in `test/workout_recovery_test.dart` use real temporary storage to test app recreation, repeated attempts, mismatched device sessions and failed saves. `test/workout_audio_test.dart` verifies cue selection without real speech hardware; `test/workout_history_screen_test.dart` verifies the repeat confirmation flow.

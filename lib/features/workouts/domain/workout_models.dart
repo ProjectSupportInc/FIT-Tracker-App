@@ -75,6 +75,9 @@ class ExerciseResult {
     required this.repetitions,
     required this.deviceId,
     required this.completedAt,
+    this.attemptId,
+    this.runId,
+    this.completed = true,
   });
 
   /// ID of the workout to which this saved result belongs.
@@ -91,6 +94,34 @@ class ExerciseResult {
 
   /// Timestamp recorded when the result was created.
   final DateTime completedAt;
+
+  final String? attemptId;
+  final String? runId;
+  final bool completed;
+  String get recordId =>
+      attemptId ?? "$key:${completedAt.microsecondsSinceEpoch}";
+
+  Map<String, dynamic> toJson() => {
+        "workoutId": workoutId,
+        "exerciseId": exerciseId,
+        "repetitions": repetitions,
+        "deviceId": deviceId,
+        "completedAt": completedAt.toIso8601String(),
+        "attemptId": recordId,
+        "runId": runId,
+        "completed": completed,
+      };
+
+  factory ExerciseResult.fromJson(Map<String, dynamic> value) => ExerciseResult(
+      workoutId: value["workoutId"] as String,
+      exerciseId: value["exerciseId"] as String,
+      repetitions: value["repetitions"] as int,
+      deviceId: value["deviceId"] as String,
+      completedAt: DateTime.parse(value["completedAt"] as String),
+      attemptId: value["attemptId"] as String? ??
+          "legacy:${value["workoutId"]}:${value["exerciseId"]}",
+      runId: value["runId"] as String?,
+      completed: value["completed"] as bool? ?? true);
 
   /// Workout:exercise identifier used to index saved results.
   String get key => '$workoutId:$exerciseId';

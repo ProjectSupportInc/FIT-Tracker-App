@@ -63,7 +63,8 @@ class WorkoutsScreen extends StatelessWidget {
                   WorkoutCard(
                     workout: workout,
                     vm: vm,
-                    onTap: vm.status(workout) == WorkoutAvailability.ready
+                    onTap: (vm.status(workout) == WorkoutAvailability.ready ||
+                            vm.status(workout) == WorkoutAvailability.completed)
                         ? () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
                                 builder: (_) =>

@@ -18,7 +18,8 @@ abstract class TrackerGateway {
   Future<void> refreshStatus();
 
   /// START begins pickup, settling, three calibration reps, then counting.
-  Future<void> startCounting();
+  Future<void> startCounting({int? sessionId});
+  void bindSession({required int bootId, required int sessionId});
   Future<void> pauseCounting();
   Future<void> resumeCounting();
 

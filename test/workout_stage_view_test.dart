@@ -54,14 +54,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     expect(cuePosition(tester), isNot(closeTo(first, 0.01)));
     await tester.pump(const Duration(seconds: 20));
-    expect(find.text('Lift into position'), findsOneWidget);
-    expect(find.text('Hold still'), findsNothing);
+    expect(find.text('Take your starting position'), findsOneWidget);
+    expect(find.text('Hold this position'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
 
     await showStage(tester, TrackerState.settling);
     await tester.pump(const Duration(seconds: 1));
     expect(cuePosition(tester), 0);
-    expect(find.text('Hold still'), findsOneWidget);
+    expect(find.text('Hold this position'), findsOneWidget);
     expect(find.byIcon(Icons.pan_tool_outlined), findsOneWidget);
   });
 
@@ -69,22 +69,22 @@ void main() {
       (tester) async {
     await showStage(tester, TrackerState.calibrating);
     await tester.pump(const Duration(seconds: 10));
-    expect(find.text('0 of 3 reps learned'), findsOneWidget);
+    expect(find.text('0 of 3 reps recorded'), findsOneWidget);
     expect(find.byIcon(Icons.check_circle_rounded), findsNothing);
 
     for (final learned in [1, 2, 0, 1, 2, 3]) {
       await showStage(tester, TrackerState.calibrating, learned: learned);
       await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('$learned of 3 reps learned'), findsOneWidget);
+      expect(find.text('$learned of 3 reps recorded'), findsOneWidget);
       expect(find.byIcon(Icons.check_circle_rounded), findsNWidgets(learned));
     }
     await tester.pump(const Duration(seconds: 10));
-    expect(find.text('Three reps learned'), findsOneWidget);
-    expect(find.text('Movement learned'), findsNothing);
+    expect(find.text('Rep 3 recorded'), findsOneWidget);
+    expect(find.text('Ready. Keep going.'), findsNothing);
 
     await showStage(tester, TrackerState.running, reps: 3, learned: 3);
     await tester.pumpAndSettle();
-    expect(find.text('Movement learned'), findsOneWidget);
+    expect(find.text('Ready. Keep going.'), findsOneWidget);
     expect(find.byKey(const ValueKey('rep-3')), findsOneWidget);
     await tester.pump(const Duration(seconds: 20));
     expect(find.byKey(const ValueKey('rep-4')), findsNothing);

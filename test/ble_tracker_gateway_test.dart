@@ -12,14 +12,22 @@ List<int> _status(
     int event = 0,
     int detail = 0,
     int request = 0,
-    int reps = 0}) {
-  final bytes = ByteData(8)
-    ..setUint8(0, 1)
+    int reps = 0,
+    int boot = 0x11223344,
+    int session = 0,
+    int revision = 1,
+    int calibration = 0}) {
+  final bytes = ByteData(20)
+    ..setUint8(0, 2)
     ..setUint8(1, state)
     ..setUint8(2, event)
     ..setUint8(3, detail)
     ..setUint16(4, request, Endian.little)
-    ..setUint16(6, reps, Endian.little);
+    ..setUint16(6, reps, Endian.little)
+    ..setUint32(8, boot, Endian.little)
+    ..setUint32(12, session, Endian.little)
+    ..setUint16(16, revision, Endian.little)
+    ..setUint8(18, calibration);
   return bytes.buffer.asUint8List();
 }
 
@@ -31,6 +39,7 @@ class _Peripheral implements BleTransport {
   Future<void> Function(List<int>)? onWrite;
   List<int> snapshot = _status();
   int disconnectCalls = 0;
+  int boot = 0x11223344, session = 0, revision = 1, calibration = 0;
   @override
   Stream<List<int>> get statusPackets => statusController.stream;
   @override
@@ -70,22 +79,52 @@ class _Peripheral implements BleTransport {
       int? event,
       int detail = 0,
       int? requestId}) {
+    if (event != 2 && packet[1] == 1) {
+      session = ByteData.sublistView(Uint8List.fromList(packet))
+          .getUint32(8, Endian.little);
+    }
+    if (event != 2 && packet[1] == 4) session = 0;
     snapshot = _status(
         state: state,
         reps: reps,
         event: event ?? (packet[1] == 6 ? 0 : 1),
         detail: detail,
-        request: requestId ?? request(packet));
+        request: requestId ?? request(packet),
+        boot: boot,
+        session: session,
+        revision: ++revision,
+        calibration: calibration);
     statusController.add(snapshot);
   }
 
   void publish({int state = 0, int event = 0, int detail = 0, int reps = 0}) {
-    snapshot = _status(state: state, event: event, detail: detail, reps: reps);
+    if (state == 0 || state == 1 || state == 2 || event == 6) calibration = 0;
+    if (event == 5) calibration = detail;
+    if (state == 4) calibration = 3;
+    snapshot = _status(
+        state: state,
+        event: event,
+        detail: detail,
+        reps: reps,
+        boot: boot,
+        session: session,
+        revision: ++revision,
+        calibration: calibration);
     statusController.add(snapshot);
   }
 
-  void rep(int count) => repController
-      .add([1, 1, count & 255, count >> 8, 0x78, 0x56, 0x34, 0x12]);
+  void rep(int count) {
+    final bytes = ByteData(18)
+      ..setUint8(0, 2)
+      ..setUint8(1, 1)
+      ..setUint16(2, count, Endian.little)
+      ..setUint32(4, 0x12345678, Endian.little)
+      ..setUint32(8, boot, Endian.little)
+      ..setUint32(12, session, Endian.little)
+      ..setUint16(16, ++revision, Endian.little);
+    repController.add(bytes.buffer.asUint8List());
+  }
+
   @override
   Future<void> disconnect() async {
     disconnectCalls++;
@@ -113,7 +152,8 @@ void main() {
 
   test('Connect reads status and sends GET_STATUS, no exercise selection', () {
     expect(gateway.status!.state, TrackerState.idle);
-    expect(peripheral.writes.single, [1, 6, 1, 0, 0, 0, 0, 0]);
+    expect(peripheral.writes.single,
+        [2, 6, 1, 0, 0x44, 0x33, 0x22, 0x11, 0, 0, 0, 0]);
   });
   test('START, PAUSE, RESUME, FINISH and RESET use distinct new opcodes',
       () async {
@@ -128,7 +168,7 @@ void main() {
     expect(gateway.status!.repetitions, 0);
     expect(peripheral.writes.map((p) => p[1]), [6, 1, 2, 3, 6, 5, 4]);
     expect(
-        peripheral.writes.every((p) => p.skip(4).every((v) => v == 0)), isTrue);
+        peripheral.writes.every((p) => p.length == 12 && p[4] == 0x44), isTrue);
     expect(peripheral.writes.map(peripheral.request).toSet().length,
         peripheral.writes.length);
   });
@@ -281,5 +321,55 @@ void main() {
     expect(gateway.connectedDevice, isNotNull);
     await gateway.reset();
     expect(gateway.status!.state, TrackerState.idle);
+  });
+  test('Late snapshots from an earlier session cannot replace a newer revision',
+      () async {
+    await gateway.startCounting(sessionId: 10);
+    final old = List<int>.of(peripheral.snapshot);
+    await gateway.reset();
+    await gateway.startCounting(sessionId: 20);
+    peripheral.statusController.add(old);
+    expect(gateway.status!.sessionId, 20);
+    peripheral.session = 10;
+    peripheral.rep(99);
+    await Future<void>.delayed(Duration.zero);
+    expect(gateway.status!.repetitions, 0);
+  });
+
+  test('Calibration snapshot is recoverable without observing earlier events',
+      () async {
+    peripheral.session = 42;
+    peripheral.publish(state: 3, event: 5, detail: 2);
+    await gateway.disconnect();
+    await gateway.connect(const TrackerDevice(id: 'esp32'));
+    expect(gateway.status!.calibrationReps, 2);
+    expect(gateway.status!.sessionId, 42);
+  });
+
+  test('Revision comparison works across the uint16 wrap', () async {
+    peripheral.revision = 65533;
+    await gateway.disconnect();
+    peripheral.publish(state: 4, reps: 7);
+    await gateway.connect(const TrackerDevice(id: 'esp32'));
+    peripheral.revision = -1;
+    peripheral.publish(state: 4, reps: 8);
+    expect(gateway.status!.repetitions, 8);
+  });
+
+  test(
+      'A silent connected peripheral is disconnected without waiting for a tap',
+      () async {
+    final silent = _Peripheral();
+    final monitored = BleTrackerGateway(
+        transport: silent,
+        heartbeatInterval: const Duration(milliseconds: 20),
+        freshnessTimeout: const Duration(milliseconds: 80),
+        commandTimeout: const Duration(milliseconds: 300));
+    addTearDown(monitored.dispose);
+    await monitored.connect(const TrackerDevice(id: 'esp32'));
+    silent.onWrite = (_) async {};
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(monitored.connectedDevice, isNull);
+    expect(silent.disconnectCalls, greaterThan(1));
   });
 }

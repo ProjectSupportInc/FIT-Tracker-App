@@ -6,6 +6,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/fittracker_theme.dart';
+import '../../../app/app_services.dart';
+import '../../workouts/presentation/live_exercise_screen.dart';
 import '../../home/presentation/today_screen.dart';
 import '../../meals/presentation/meals_screen.dart';
 import '../../profile/presentation/profile_screen.dart';
@@ -63,7 +65,28 @@ class _MainShellState extends State<MainShell> {
             const SizedBox(width: 10),
           ],
         ),
-        body: IndexedStack(index: _selected, children: _pages),
+        body: AnimatedBuilder(
+            animation: AppServices.of(context).workouts,
+            builder: (context, _) {
+              final vm = AppServices.of(context).workouts;
+              return Column(children: [
+                if (vm.hasActiveSession)
+                  MaterialBanner(
+                      content: Text(
+                          '${vm.activeExercise!.name} · ${vm.hasPendingResult ? "result ready to save" : "session in progress"}'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                    builder: (_) => LiveExerciseScreen(
+                                        workout: vm.activeWorkout!,
+                                        exercise: vm.activeExercise!))),
+                            child: const Text('Open workout'))
+                      ]),
+                Expanded(
+                    child: IndexedStack(index: _selected, children: _pages)),
+              ]);
+            }),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _selected,
           onDestinationSelected: (index) => setState(() => _selected = index),

@@ -16,6 +16,7 @@ import '../features/tracker/data/tracker_gateway.dart';
 import '../features/workouts/data/local_workout_repository.dart';
 import '../features/workouts/data/workout_repository.dart';
 import '../features/workouts/presentation/workout_view_model.dart';
+import '../features/workouts/presentation/workout_audio.dart';
 import 'app_services.dart';
 import 'fittracker_theme.dart';
 
@@ -41,6 +42,7 @@ class _FitTrackerAppState extends State<FitTrackerApp>
 
   /// Workout controller owned and disposed by the root app State.
   late final WorkoutViewModel _workouts;
+  late final WorkoutAudio _audio;
 
   /// Theme controller owned by the app; listened to by its AnimatedBuilder.
   final ThemeViewModel _theme = ThemeViewModel();
@@ -55,13 +57,19 @@ class _FitTrackerAppState extends State<FitTrackerApp>
       repository: widget.repository ?? LocalWorkoutRepository(),
       tracker: widget.tracker ?? BleTrackerGateway(),
     );
+    _audio = WorkoutAudio(_workouts);
     _workouts.load();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Permission dialogs only make the app inactive; pause on actual backgrounding.
+    if (state == AppLifecycleState.resumed) {
+      _workouts.returnToForeground();
+      _audio.setForeground(true);
+    }
     if (state == AppLifecycleState.paused) {
+      _audio.setForeground(false);
       unawaited(_workouts.pauseForBackground().catchError((Object _) {}));
     }
   }
@@ -71,6 +79,7 @@ class _FitTrackerAppState extends State<FitTrackerApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _auth.dispose();
+    _audio.dispose();
     _workouts.dispose();
     _theme.dispose();
     super.dispose();
@@ -82,6 +91,7 @@ class _FitTrackerAppState extends State<FitTrackerApp>
     return AppServices(
       auth: _auth,
       workouts: _workouts,
+      audio: _audio,
       child: AnimatedBuilder(
         animation: _theme,
         builder: (context, _) => MaterialApp(
