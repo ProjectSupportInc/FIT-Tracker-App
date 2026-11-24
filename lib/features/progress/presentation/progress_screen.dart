@@ -82,7 +82,7 @@ class ProgressScreen extends StatelessWidget {
                           if (vm.resultFor(workout, ex) != null) ...[
                             Row(children: [
                               const Icon(Icons.check_circle_outline,
-                                  size: 18, color: FitColors.lime),
+                                  size: 18, color: FitColors.accent),
                               const SizedBox(width: 10),
                               Expanded(
                                   child: Text(ex.name,

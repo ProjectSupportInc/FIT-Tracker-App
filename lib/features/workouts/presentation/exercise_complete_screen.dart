@@ -43,7 +43,7 @@ class ExerciseCompleteScreen extends StatelessWidget {
               child: Column(children: [
                 const CircleAvatar(
                     radius: 57,
-                    backgroundColor: FitColors.lime,
+                    backgroundColor: FitColors.accent,
                     child: Icon(Icons.check_rounded,
                         size: 63, color: FitColors.ink)),
                 const SizedBox(height: 24),

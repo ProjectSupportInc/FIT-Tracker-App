@@ -66,7 +66,7 @@ class WorkoutDetailScreen extends StatelessWidget {
                   const SizedBox(height: 24),
                   FitCard(
                       child: Row(children: [
-                    const Icon(Icons.bolt, size: 32, color: FitColors.peach),
+                    const Icon(Icons.bolt, size: 32, color: FitColors.amber),
                     const SizedBox(width: 15),
                     Expanded(
                         child: Column(
@@ -164,10 +164,11 @@ class WorkoutDetailScreen extends StatelessWidget {
         child: Row(children: [
           CircleAvatar(
             backgroundColor: enabled
-                ? FitColors.lime
+                ? FitColors.accent
                 : Theme.of(context).colorScheme.surfaceContainerHighest,
             child: finished
-                ? const Icon(Icons.check, color: FitColors.ink)
+                ? Icon(Icons.check,
+                    color: Theme.of(context).colorScheme.onSurface)
                 : unlocked
                     ? ExerciseIllustration(
                         kind: exercise.kind, size: 34, color: FitColors.ink)

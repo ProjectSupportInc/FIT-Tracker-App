@@ -57,7 +57,7 @@ class WorkoutCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: locked
                   ? Theme.of(context).colorScheme.surfaceContainerHighest
-                  : FitColors.lime,
+                  : FitColors.accent,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Icon(

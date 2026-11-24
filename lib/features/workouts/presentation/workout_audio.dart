@@ -24,14 +24,15 @@ class WorkoutAudio extends ChangeNotifier {
   final WorkoutViewModel workouts;
   final MethodChannel _channel;
   WorkoutAudioMode mode = WorkoutAudioMode.voice;
-  bool speakReps = false;
   bool voiceAvailable = false;
   bool _foreground = true, _disposed = false, _active = false;
   bool _visible = false;
   bool _wasDisconnected = false;
+  bool _needsSnapshot = false;
   String? _session, _lastCue;
   TrackerState? _state;
   int _reps = 0, _calibration = 0;
+  bool _nearTargetAnnounced = false, _targetAnnounced = false;
 
   Future<dynamic> _invoke(String method, [Object? arguments]) async {
     try {
@@ -48,22 +49,18 @@ class WorkoutAudio extends ChangeNotifier {
     if (_disposed || settings is! Map) return;
     mode = WorkoutAudioMode.values.firstWhere((m) => m.name == settings['mode'],
         orElse: () => WorkoutAudioMode.voice);
-    speakReps = settings['speakReps'] == true;
     voiceAvailable = settings['voiceAvailable'] == true;
     notifyListeners();
   }
 
-  Future<void> setPreferences({WorkoutAudioMode? mode, bool? speakReps}) async {
+  Future<void> setPreferences({WorkoutAudioMode? mode}) async {
     this.mode = mode ?? this.mode;
-    this.speakReps = speakReps ?? this.speakReps;
     await _invoke('stop');
-    await _invoke(
-        'setSettings', {'mode': this.mode.name, 'speakReps': this.speakReps});
+    await _invoke('setSettings', {'mode': this.mode.name});
     if (!_disposed) notifyListeners();
   }
 
-  Future<void> preview() =>
-      _cue('Get ready. Hold your starting position.', 'ready');
+  Future<void> preview() => _cue('Good job.', 'rep');
 
   Future<void> _cue(String? text, String tone) async {
     if (!_foreground || mode == WorkoutAudioMode.muted) return;
@@ -96,8 +93,11 @@ class WorkoutAudio extends ChangeNotifier {
       _reps = 0;
       _calibration = 0;
       _wasDisconnected = false;
+      _nearTargetAnnounced = false;
+      _targetAnnounced = false;
     }
     if (!active) {
+      _needsSnapshot = true;
       unawaited(_invoke('stop'));
       return;
     }
@@ -116,45 +116,50 @@ class WorkoutAudio extends ChangeNotifier {
       return;
     }
     if (status == null) return;
-    String? text = _wasDisconnected ? 'Tracker reconnected.' : null;
-    _wasDisconnected = false;
+    final recovering = _wasDisconnected || _needsSnapshot || _state == null;
+    String? text;
     var tone = 'ready';
     if (status.event == TrackerEvent.calibrationReset && _calibration > 0) {
-      text = 'Calibration reset. Take your starting position.';
+      text = 'Calibration reset. Get ready.';
       tone = 'reset';
-    } else if (status.state != _state) {
+    } else if (status.state != _state || _wasDisconnected) {
       text = switch (status.state) {
-        TrackerState.waitPickup => 'Take your starting position.',
-        TrackerState.settling => 'Hold this position.',
-        TrackerState.calibrating =>
-          'Begin three controlled reps. Pause briefly between reps.',
-        TrackerState.running => workouts.liveReps == 3
-            ? 'Ready. Three reps counted. Keep going.'
-            : 'Continue your set.',
+        TrackerState.waitPickup => 'Waiting for start.',
+        TrackerState.settling => 'Hold position.',
+        TrackerState.calibrating => 'Begin your reps.',
         TrackerState.paused => 'Workout paused.',
-        TrackerState.finished => 'Set ended.',
         TrackerState.error => 'Tracker problem. Rest the equipment.',
-        TrackerState.idle => null,
+        _ => null,
       };
       if (status.state == TrackerState.error) tone = 'error';
     }
-    if (status.state == TrackerState.calibrating &&
-        status.calibrationReps > _calibration) {
-      text = switch (status.calibrationReps) {
-        1 => 'One recorded. Repeat the same movement.',
-        2 => 'Two recorded. Repeat once more.',
-        _ => 'Three recorded.',
-      };
-    }
+    // A recovered count is a snapshot, not a new rep to announce.
+    final counted = !recovering &&
+        _state != TrackerState.paused &&
+        ((status.state == TrackerState.calibrating &&
+                status.calibrationReps > _calibration) ||
+            (status.state == TrackerState.running &&
+                workouts.liveReps >
+                    (_state == TrackerState.calibrating
+                        ? _calibration
+                        : _reps)));
     final target = workouts.activeExercise!.targetReps;
-    final counted =
-        status.state == TrackerState.running && workouts.liveReps > _reps;
-    if (counted && workouts.liveReps >= target && _reps < target) {
-      text = 'Target reached. Finish when you are ready.';
-    } else if (counted && _state == TrackerState.running) {
-      text = speakReps ? '${workouts.liveReps}' : null;
-      tone = 'rep';
+    if (status.state == TrackerState.running) {
+      if (counted && workouts.liveReps >= target && !_targetAnnounced) {
+        text = 'Good job.';
+      } else if (counted &&
+          target > 2 &&
+          workouts.liveReps == target - 2 &&
+          !_nearTargetAnnounced) {
+        text = 'Two more left.';
+      }
+      // Do not replay milestones after reconnect, resume, or extra repetitions.
+      if (workouts.liveReps >= target - 2) _nearTargetAnnounced = true;
+      if (workouts.liveReps >= target) _targetAnnounced = true;
     }
+    if (counted) tone = 'rep';
+    _wasDisconnected = false;
+    _needsSnapshot = false;
     _state = status.state;
     _calibration = status.calibrationReps;
     _reps = workouts.liveReps;
@@ -194,21 +199,18 @@ class WorkoutAudioSettings extends StatelessWidget {
                       items: const [
                         DropdownMenuItem(
                             value: WorkoutAudioMode.voice,
-                            child: Text('Voice and tones')),
+                            child: Text('Brief voice and beeps')),
                         DropdownMenuItem(
                             value: WorkoutAudioMode.tones,
-                            child: Text('Tones only')),
+                            child: Text('Beeps only')),
                         DropdownMenuItem(
                             value: WorkoutAudioMode.muted,
                             child: Text('Muted')),
                       ]),
-                  SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Speak rep counts'),
-                      value: audio.speakReps,
-                      onChanged: audio.mode == WorkoutAudioMode.voice
-                          ? (value) => audio.setPreferences(speakReps: value)
-                          : null),
+                  const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                          'Brief guidance at the start and near your goal. A beep marks each recorded rep.')),
                   if (audio.mode == WorkoutAudioMode.voice &&
                       !audio.voiceAvailable)
                     const Text(

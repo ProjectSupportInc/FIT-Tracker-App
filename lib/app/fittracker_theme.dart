@@ -19,23 +19,23 @@ import 'package:flutter/material.dart';
 
 /// Named color constants reused by fitTheme() and presentation widgets.
 class FitColors {
-  /// Bright accent used for primary buttons, badges, and progress indicators.
-  static const lime = Color(0xFFB8FF4D);
+  /// Bright accent used for selected dates, badges, and progress indicators.
+  static const accent = Color(0xFF32D26F);
 
   /// Dark-mode page background.
-  static const navy = Color(0xFF091C20);
+  static const background = Color(0xFF000000);
 
   /// Dark-mode card/surface background.
-  static const navyCard = Color(0xFF132A2E);
+  static const surface = Color(0xFF1E1E1E);
 
-  /// Dark text/icon color, especially on the lime accent.
-  static const ink = Color(0xFF14292C);
+  /// Dark text/icon color, especially on the green accent.
+  static const ink = Color(0xFF141414);
 
   /// Pale background used for light-mode badges and navigation selection.
-  static const softGreen = Color(0xFFE8F0ED);
+  static const accentContainerLight = Color(0xFFE4F4E9);
 
   /// Secondary accent used for selected icons and small headings.
-  static const peach = Color(0xFFF2A16C);
+  static const amber = Color(0xFFFFB340);
 }
 
 /// Theme state created by FitTrackerApp and passed through MainShell to ProfileScreen.
@@ -62,21 +62,32 @@ ThemeData fitTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
 
   /// Page/app-bar background chosen for this brightness.
-  final background = dark ? FitColors.navy : const Color(0xFFF4F8F7);
+  final background = dark ? FitColors.background : const Color(0xFFF5F5F5);
 
   /// Card and navigation surface color chosen for this brightness.
-  final surface = dark ? FitColors.navyCard : Colors.white;
+  final surface = dark ? FitColors.surface : Colors.white;
 
   /// Default readable text color chosen for this brightness.
-  final foreground = dark ? const Color(0xFFF1FBF6) : FitColors.ink;
+  final foreground = dark ? const Color(0xFFF5F5F5) : FitColors.ink;
 
   /// Material color scheme passed into ThemeData.
   final scheme = ColorScheme.fromSeed(
-    seedColor: FitColors.lime,
+    seedColor: FitColors.accent,
     brightness: brightness,
-    primary: dark ? FitColors.lime : const Color(0xFF315B45),
+    primary: dark ? FitColors.accent : const Color(0xFF167A3E),
     surface: surface,
     onSurface: foreground,
+    onPrimary: dark ? FitColors.ink : Colors.white,
+    secondary: dark ? FitColors.amber : const Color(0xFF8C5000),
+    onSurfaceVariant: dark ? const Color(0xFFB3B3B3) : const Color(0xFF595959),
+    surfaceContainerHighest:
+        dark ? const Color(0xFF2B2B2B) : const Color(0xFFE8E8E8),
+    surfaceContainerHigh:
+        dark ? const Color(0xFF262626) : const Color(0xFFF0F0F0),
+    surfaceContainer: surface,
+    surfaceContainerLow: surface,
+    outline: const Color(0xFF767676),
+    outlineVariant: dark ? const Color(0xFF383838) : const Color(0xFFD6D6D6),
   );
 
   // Larger reading sizes keep workout prompts legible at arm's length.
@@ -119,7 +130,8 @@ ThemeData fitTheme(Brightness brightness) {
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: surface,
-      indicatorColor: dark ? const Color(0xFF294A3B) : FitColors.softGreen,
+      indicatorColor:
+          dark ? const Color(0xFF303030) : FitColors.accentContainerLight,
       height: 78,
       labelTextStyle: WidgetStateProperty.all(
         const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
@@ -127,8 +139,8 @@ ThemeData fitTheme(Brightness brightness) {
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: FitColors.lime,
-        foregroundColor: FitColors.ink,
+        backgroundColor: dark ? Colors.white : FitColors.ink,
+        foregroundColor: dark ? FitColors.ink : Colors.white,
         minimumSize: const Size.fromHeight(56),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),

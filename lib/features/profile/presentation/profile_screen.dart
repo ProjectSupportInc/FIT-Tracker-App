@@ -47,7 +47,7 @@ class ProfileScreen extends StatelessWidget {
           title: const Text('Dark mode',
               style: TextStyle(fontWeight: FontWeight.w800)),
           secondary: Icon(theme.isDark ? Icons.dark_mode : Icons.light_mode,
-              color: FitColors.lime),
+              color: FitColors.accent),
         )),
         const SizedBox(height: 18),
         if (AppServices.of(context).audio != null)

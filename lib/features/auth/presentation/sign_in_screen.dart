@@ -31,7 +31,7 @@ class SignInScreen extends StatelessWidget {
                 width: 124,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                      colors: [FitColors.lime, Color(0xFF79C96B)]),
+                      colors: [FitColors.accent, Color(0xFF20994A)]),
                   borderRadius: BorderRadius.circular(35),
                 ),
                 child: const Icon(Icons.fitness_center_rounded,

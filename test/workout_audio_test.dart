@@ -32,7 +32,7 @@ void main() {
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       if (call.method == 'getSettings') {
-        return {'mode': 'voice', 'speakReps': false, 'voiceAvailable': true};
+        return {'mode': 'voice', 'speakReps': true, 'voiceAvailable': true};
       }
       return null;
     });
@@ -54,29 +54,54 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  test(
-      'Guidance follows phases and accepted reps, without replaying heartbeats',
+  test('Only setup cues are spoken; calibration and normal reps beep once',
       () async {
-    expect(cues().last['text'], 'Take your starting position.');
+    expect(cues().last['text'], 'Waiting for start.');
     tracker.publish(TrackerState.settling);
+    expect(cues().last['text'], 'Hold position.');
     tracker.publish(TrackerState.calibrating);
-    tracker.publish(TrackerState.calibrating, calReps: 1);
-    await flush();
-    expect(cues().last['text'], 'One recorded. Repeat the same movement.');
+    expect(cues().last['text'], 'Begin your reps.');
+    for (final rep in [1, 2, 3]) {
+      tracker.publish(TrackerState.calibrating, calReps: rep);
+      expect(cues().last['tone'], 'rep');
+      expect(cues().last['text'], isNull);
+    }
     final count = cues().length;
-    await tracker.refreshStatus();
-    await tracker.refreshStatus();
-    await flush();
-    expect(cues(), hasLength(count));
     tracker.completeCalibration();
+    await tracker.refreshStatus();
+    expect(cues(), hasLength(count));
     tracker.emitReps(4);
+    await tracker.refreshStatus();
     await flush();
+    expect(cues(), hasLength(count + 1));
     expect(cues().last['tone'], 'rep');
     expect(cues().last['text'], isNull);
   });
 
-  test(
-      'Mute suppresses cues and enabling spoken counts announces only the latest count',
+  test('Two remaining and target cues retain the beep and never repeat',
+      () async {
+    tracker.completeCalibration();
+    tracker.emitReps(7);
+    expect(cues().last['text'], isNull);
+    tracker.emitReps(8);
+    expect(cues().last['text'], 'Two more left.');
+    expect(cues().last['tone'], 'rep');
+    tracker.emitReps(9);
+    expect(cues().last['text'], isNull);
+    tracker.emitReps(10);
+    expect(cues().last['text'], 'Good job.');
+    expect(cues().last['tone'], 'rep');
+    tracker.emitReps(11);
+    await vm.togglePause();
+    await vm.togglePause();
+    tracker.emitReps(12);
+    await flush();
+    expect(cues().where((c) => c['text'] == 'Two more left.'), hasLength(1));
+    expect(cues().where((c) => c['text'] == 'Good job.'), hasLength(1));
+    expect(cues().last['text'], isNull);
+  });
+
+  test('Mute suppresses all cues; old spoken-count preference is ignored',
       () async {
     await audio.setPreferences(mode: WorkoutAudioMode.muted);
     final count = cues().length;
@@ -84,14 +109,37 @@ void main() {
     tracker.emitReps(5);
     await flush();
     expect(cues(), hasLength(count));
-    await audio.setPreferences(mode: WorkoutAudioMode.voice, speakReps: true);
+    await audio.setPreferences(mode: WorkoutAudioMode.voice);
+    tracker.emitReps(6);
+    await flush();
+    expect(cues().last['tone'], 'rep');
+    expect(cues().last['text'], isNull);
+    await audio.setPreferences(mode: WorkoutAudioMode.tones);
     tracker.emitReps(8);
     await flush();
-    expect(cues().last['text'], '8');
-    expect(cues().where((c) => c['text'] == '6' || c['text'] == '7'), isEmpty);
-    tracker.emitReps(10);
+    expect(cues().last['mode'], 'tones');
+    expect(cues().last['tone'], 'rep');
+  });
+
+  test('Reconnect snapshots do not play missed rep or target cues', () async {
+    tracker.completeCalibration();
+    tracker.emitReps(7);
+    tracker.restoredOnConnect = TrackerStatus(
+        state: TrackerState.running,
+        repetitions: 10,
+        calibrationReps: 3,
+        bootId: tracker.bootId,
+        sessionId: tracker.sessionId);
+    tracker.emitStatus(null);
     await flush();
-    expect(cues().last['text'], contains('Target reached'));
+    final repSounds = cues().where((c) => c['tone'] == 'rep').length;
+    await vm.reconnectActiveExercise(automatic: true);
+    await flush();
+    expect(cues().where((c) => c['tone'] == 'rep'), hasLength(repSounds));
+    tracker.emitReps(11);
+    await flush();
+    expect(cues().last['text'], isNull);
+    expect(cues().where((c) => c['text'] == 'Good job.'), isEmpty);
   });
 
   test(
@@ -107,6 +155,8 @@ void main() {
     expect(calls.where((c) => c.method == 'stop'), isNotEmpty);
     expect(calls.where((c) => c.method == 'setActive').last.arguments, isFalse);
     audio.setForeground(true);
+    await flush();
+    expect(cues(), hasLength(count));
     audio.setWorkoutVisible(false);
     await flush();
     expect(calls.where((c) => c.method == 'setActive').last.arguments, isFalse);
@@ -123,8 +173,7 @@ void main() {
         bootId: tracker.bootId,
         sessionId: tracker.sessionId));
     await flush();
-    expect(
-        cues().last['text'], 'Calibration reset. Take your starting position.');
+    expect(cues().last['text'], 'Calibration reset. Get ready.');
     expect(vm.liveReps, 0);
   });
 }

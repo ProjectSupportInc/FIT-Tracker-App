@@ -100,12 +100,15 @@ class FitBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
         color: highlight
-            ? FitColors.lime
-            : (dark ? const Color(0xFF254247) : FitColors.softGreen),
+            ? FitColors.accent
+            : (dark ? const Color(0xFF303030) : FitColors.accentContainerLight),
         borderRadius: BorderRadius.circular(30),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 6)],
+        if (icon != null) ...[
+          Icon(icon, size: 16, color: highlight ? FitColors.ink : null),
+          const SizedBox(width: 6)
+        ],
         Flexible(
             child: Text(label,
                 style: TextStyle(
@@ -168,7 +171,7 @@ class StatTile extends StatelessWidget {
           child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: FitColors.peach),
+          Icon(icon, color: FitColors.amber),
           const SizedBox(height: 12),
           Text(number,
               style: Theme.of(context)

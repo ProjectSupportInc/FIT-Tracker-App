@@ -53,7 +53,7 @@ class _TodayScreenState extends State<TodayScreen> {
             children: [
               Text(longDate(today).toUpperCase(),
                   style: const TextStyle(
-                      color: FitColors.peach,
+                      color: FitColors.amber,
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 1.5)),
@@ -71,7 +71,7 @@ class _TodayScreenState extends State<TodayScreen> {
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                      colors: [Color(0xFF103238), Color(0xFF224E48)]),
+                      colors: [Color(0xFF1E1E1E), Color(0xFF333333)]),
                   borderRadius: BorderRadius.circular(26),
                 ),
                 child: Stack(children: [
@@ -79,7 +79,7 @@ class _TodayScreenState extends State<TodayScreen> {
                       right: -10,
                       top: 0,
                       child: Icon(Icons.fitness_center_rounded,
-                          size: 112, color: FitColors.lime.withAlpha(40))),
+                          size: 112, color: FitColors.accent.withAlpha(40))),
                   const Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -95,7 +95,7 @@ class _TodayScreenState extends State<TodayScreen> {
                         SizedBox(height: 11),
                         Text('Show up. Move with purpose. Get stronger.',
                             style: TextStyle(
-                                color: Color(0xFFCCDFD8), fontSize: 12)),
+                                color: Color(0xFFCCCCCC), fontSize: 12)),
                       ]),
                 ]),
               ),
@@ -173,7 +173,7 @@ class _TodayScreenState extends State<TodayScreen> {
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 12),
             decoration: BoxDecoration(
-              color: selected ? FitColors.lime : Theme.of(context).cardColor,
+              color: selected ? FitColors.accent : Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(15),
             ),
             child: Column(children: [

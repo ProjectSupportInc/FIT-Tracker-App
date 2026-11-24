@@ -25,7 +25,7 @@ class MealsScreen extends StatelessWidget {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                const Icon(Icons.restaurant, size: 44, color: FitColors.lime),
+                const Icon(Icons.restaurant, size: 44, color: FitColors.accent),
                 const SizedBox(height: 18),
                 Text('Meal plans',
                     style: Theme.of(context)

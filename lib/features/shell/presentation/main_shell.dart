@@ -45,7 +45,7 @@ class _MainShellState extends State<MainShell> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           title: const Row(children: [
-            Icon(Icons.north_east_rounded, color: FitColors.lime),
+            Icon(Icons.north_east_rounded, color: FitColors.accent),
             SizedBox(width: 8),
             Text('FITTRACKER',
                 style: TextStyle(
